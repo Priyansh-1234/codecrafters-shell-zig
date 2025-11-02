@@ -8,9 +8,22 @@ var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
 const commandFn = *const fn (args: []const u8) anyerror!void;
+var global_command_functions: *std.hash_map.HashMap([]const u8, *const fn ([]const u8) anyerror!void, std.hash_map.StringContext, 80) = undefined;
 
 fn echoFn(args: []const u8) !void {
     try stdout.print("{s}\n", .{args});
+}
+
+fn exitFn(_: []const u8) !void {
+    return error.TemplateFunction;
+}
+
+fn typeFn(args: []const u8) !void {
+    if (global_command_functions.get(args)) |_| {
+        try stdout.print("{s} is a shell builtin\n", .{args});
+    } else {
+        try stdout.print("{s}: not found\n", .{args});
+    }
 }
 
 pub fn main() !void {
@@ -21,7 +34,11 @@ pub fn main() !void {
     var command_functions = std.StringHashMap(commandFn).init(allocator);
     defer command_functions.deinit();
 
+    global_command_functions = &command_functions;
+
     try command_functions.put("echo", &echoFn);
+    try command_functions.put("exit", &exitFn);
+    try command_functions.put("type", &typeFn);
 
     while (true) {
         try stdout.print("$ ", .{});
