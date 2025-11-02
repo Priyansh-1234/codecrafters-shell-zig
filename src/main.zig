@@ -17,8 +17,14 @@ pub fn main() !void {
         if (command) |cmd| {
             if (std.mem.eql(u8, "exit", cmd)) {
                 break;
+            } else if (std.mem.eql(u8, "echo", cmd)) {
+                while (commands.next()) |arg| {
+                    try stdout.print("{s} ", .{arg});
+                }
+                try stdout.print("\n", .{});
+            } else {
+                try stdout.print("{s}: command not found\n", .{cmd});
             }
-            try stdout.print("{s}: command not found\n", .{cmd});
         }
     }
 }
