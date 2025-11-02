@@ -11,6 +11,7 @@ pub fn main() !void {
     while (true) {
         try stdout.print("$ ", .{});
         const command = try stdin.takeDelimiterExclusive('\n');
+        if (command.len == 0) continue;
         try stdout.print("{s}: command not found\n", .{command});
     }
 }
