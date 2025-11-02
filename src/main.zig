@@ -10,8 +10,15 @@ const stdin = &stdin_reader.interface;
 pub fn main() !void {
     while (true) {
         try stdout.print("$ ", .{});
-        var command = try stdin.takeDelimiterInclusive('\n');
-        command = if (command[command.len - 1] == '\n') command[0 .. command.len - 1] else command;
-        try stdout.print("{s}: command not found\n", .{command});
+        var arguments = try stdin.takeDelimiterInclusive('\n');
+        arguments = if (arguments[arguments.len - 1] == '\n') arguments[0 .. arguments.len - 1] else arguments;
+        var commands = std.mem.splitScalar(u8, arguments, ' ');
+        const command = commands.next();
+        if (command) |cmd| {
+            if (std.mem.eql(u8, "exit", cmd)) {
+                break;
+            }
+            try stdout.print("{s}: command not found\n", .{cmd});
+        }
     }
 }
