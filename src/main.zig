@@ -10,8 +10,8 @@ const stdin = &stdin_reader.interface;
 pub fn main() !void {
     while (true) {
         try stdout.print("$ ", .{});
-        const command = try stdin.takeDelimiterExclusive('\n');
-        if (command.len == 0) continue;
+        var command = try stdin.takeDelimiterInclusive('\n');
+        command = if (command[command.len - 1] == '\n') command[0 .. command.len - 1] else command;
         try stdout.print("{s}: command not found\n", .{command});
     }
 }
