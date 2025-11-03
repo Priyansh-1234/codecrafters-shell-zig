@@ -19,39 +19,61 @@ fn exitFn(_: []const u8) !void {
     return error.TemplateFunction;
 }
 
+fn isExecutable(allocator: std.mem.Allocator, filename: []const u8) !?[]const u8 {
+    const path = try std.process.getEnvVarOwned(allocator, "PATH");
+    defer allocator.free(path);
+    var iter = std.mem.splitScalar(u8, path, std.fs.path.delimiter);
+
+    while (iter.next()) |dir| {
+        var directory = if (std.fs.path.isAbsolute(dir)) std.fs.openDirAbsolute(dir, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        } else continue;
+        defer directory.close();
+
+        const stat = directory.statFile(filename) catch continue;
+
+        if (stat.mode & (std.posix.S.IXUSR | std.posix.S.IXGRP | std.posix.S.IXOTH) != 0) {
+            const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, filename });
+            return file_path;
+        }
+    }
+
+    return null;
+}
+
 fn typeFn(args: []const u8) !void {
     if (global_command_functions.get(args)) |_| {
         try stdout.print("{s} is a shell builtin\n", .{args});
-    } else {
-        const path = try std.process.getEnvVarOwned(allocator, "PATH");
-        var iter = std.mem.splitScalar(u8, path, std.fs.path.delimiter);
-
-        while (iter.next()) |dir| {
-            var directory = if (std.fs.path.isAbsolute(dir)) std.fs.openDirAbsolute(dir, .{}) catch |err| switch (err) {
-                error.FileNotFound => continue,
-                else => return err,
-            } else continue;
-            defer directory.close();
-
-            const stat = directory.statFile(args) catch continue;
-            if (stat.mode & (std.posix.S.IXUSR | std.posix.S.IXGRP | std.posix.S.IXOTH) != 0) {
-                const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, args });
-                try stdout.print("{s} is {s}\n", .{ args, file_path });
-                return;
-            }
-        } else {
-            try stdout.print("{s}: not found\n", .{args});
-        }
+        return;
     }
+
+    if (try isExecutable(global_allocator, args)) |file_path| {
+        defer global_allocator.free(file_path);
+        try stdout.print("{s} is {s}\n", .{ args, file_path });
+        return;
+    }
+
+    try stdout.print("{s}: not found\n", .{args});
+}
+
+fn parseArgs(allocator: std.mem.Allocator, args_iter: *std.mem.TokenIterator(u8, std.mem.DelimiterType.scalar)) !std.ArrayList([]const u8) {
+    var argv: std.ArrayList([]const u8) = .empty;
+    args_iter.reset();
+    while (args_iter.next()) |arg| {
+        try argv.append(allocator, arg);
+    }
+
+    return argv;
 }
 
 var dba = std.heap.DebugAllocator(.{}){};
-const allocator = dba.allocator();
+const global_allocator = dba.allocator();
 
 pub fn main() !void {
-    defer _ = dba.deinit();
+    defer std.debug.assert(dba.deinit() == .ok);
 
-    var command_functions = std.StringHashMap(commandFn).init(allocator);
+    var command_functions = std.StringHashMap(commandFn).init(global_allocator);
     defer command_functions.deinit();
 
     global_command_functions = &command_functions;
@@ -68,16 +90,48 @@ pub fn main() !void {
             command_input = command_input[0 .. command_input.len - 1];
         }
 
-        var arguments = std.mem.splitScalar(u8, command_input, ' ');
-        const command = arguments.first();
-        const args = arguments.rest();
+        var arguments = std.mem.tokenizeScalar(u8, command_input, ' ');
+        const command = arguments.next() orelse unreachable;
+        const rest = arguments.rest();
+
+        arguments.reset();
 
         if (std.mem.eql(u8, "exit", command)) break;
 
         if (command_functions.get(command)) |func| {
-            try func(args);
+            try func(rest);
         } else {
-            try stdout.print("{s}: command not found\n", .{command});
+            const file_path = try isExecutable(global_allocator, command);
+            if (file_path) |file_exe| {
+                defer global_allocator.free(file_exe);
+
+                var args = try parseArgs(global_allocator, &arguments);
+                defer args.deinit(global_allocator);
+
+                const argv = args.items[0..];
+
+                var process = std.process.Child.init(argv, global_allocator);
+
+                process.stdin_behavior = .Ignore;
+                process.stdout_behavior = .Pipe;
+                process.stderr_behavior = .Pipe;
+
+                try process.spawn();
+
+                var buffer: [1024]u8 = undefined;
+                var process_reader = process.stdout.?.readerStreaming(&buffer);
+                const process_stdout = &process_reader.interface;
+
+                while (process_stdout.takeDelimiterInclusive('\n')) |line| {
+                    try stdout.print("{s}", .{line});
+                } else |err| {
+                    if (err != error.EndOfStream) return err;
+                }
+
+                _ = try process.wait();
+            } else {
+                try stdout.print("{s}: command not found\n", .{command});
+            }
         }
     }
 }
