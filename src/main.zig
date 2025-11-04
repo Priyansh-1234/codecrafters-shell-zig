@@ -67,6 +67,15 @@ fn isPathAbsolute(path: []const u8) !bool {
 }
 
 fn cdFn(args: []const u8) !void {
+    if (std.mem.eql(u8, "~", args)) {
+        const home = try std.process.getEnvVarOwned(global_allocator, "HOME");
+        defer global_allocator.free(home);
+
+        var dir = try std.fs.openDirAbsolute(home, .{});
+        try dir.setAsCwd();
+
+        return;
+    }
     const flag = try isPathAbsolute(args);
     if (flag) {
         var dir = std.fs.openDirAbsolute(args, .{}) catch |err| switch (err) {
