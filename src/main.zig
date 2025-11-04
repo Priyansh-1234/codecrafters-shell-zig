@@ -62,16 +62,33 @@ fn pwdFn(_: []const u8) !void {
     try stdout.print("{s}\n", .{cwd});
 }
 
-fn cdFn(args: []const u8) !void {
-    var dir = std.fs.openDirAbsolute(args, .{}) catch |err| switch (err) {
-        error.FileNotFound => {
-            try stdout.print("cd: {s}: No such file or directory\n", .{args});
-            return;
-        },
-        else => return err,
-    };
+fn isPathAbsolute(path: []const u8) !bool {
+    return std.fs.path.isAbsolute(path);
+}
 
-    try dir.setAsCwd();
+fn cdFn(args: []const u8) !void {
+    const flag = try isPathAbsolute(args);
+    if (flag) {
+        var dir = std.fs.openDirAbsolute(args, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stdout.print("cd: {s}: No such file or directory\n", .{args});
+                return;
+            },
+            else => return err,
+        };
+
+        try dir.setAsCwd();
+    } else {
+        var dir = std.fs.cwd().openDir(args, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stdout.print("cd: {s}: No such file or directory\n", .{args});
+                return;
+            },
+            else => return err,
+        };
+
+        try dir.setAsCwd();
+    }
 }
 
 fn parseArgs(allocator: std.mem.Allocator, args_iter: *std.mem.TokenIterator(u8, std.mem.DelimiterType.scalar)) !std.ArrayList([]const u8) {
