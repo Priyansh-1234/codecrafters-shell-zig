@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 const stdout = &stdout_writer.interface;
@@ -57,6 +56,12 @@ fn typeFn(args: []const u8) !void {
     try stdout.print("{s}: not found\n", .{args});
 }
 
+fn pwdFn(_: []const u8) !void {
+    var buffer: [1024]u8 = undefined;
+    const cwd = try std.fs.cwd().realpath(".", &buffer);
+    try stdout.print("{s}\n", .{cwd});
+}
+
 fn parseArgs(allocator: std.mem.Allocator, args_iter: *std.mem.TokenIterator(u8, std.mem.DelimiterType.scalar)) !std.ArrayList([]const u8) {
     var argv: std.ArrayList([]const u8) = .empty;
     args_iter.reset();
@@ -81,6 +86,7 @@ pub fn main() !void {
     try command_functions.put("echo", &echoFn);
     try command_functions.put("exit", &exitFn);
     try command_functions.put("type", &typeFn);
+    try command_functions.put("pwd", &pwdFn);
 
     while (true) {
         try stdout.print("$ ", .{});
