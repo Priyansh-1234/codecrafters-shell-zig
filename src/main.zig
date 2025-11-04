@@ -62,6 +62,18 @@ fn pwdFn(_: []const u8) !void {
     try stdout.print("{s}\n", .{cwd});
 }
 
+fn cdFn(args: []const u8) !void {
+    var dir = std.fs.openDirAbsolute(args, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try stdout.print("cd: {s}: No such file or directory\n", .{args});
+            return;
+        },
+        else => return err,
+    };
+
+    try dir.setAsCwd();
+}
+
 fn parseArgs(allocator: std.mem.Allocator, args_iter: *std.mem.TokenIterator(u8, std.mem.DelimiterType.scalar)) !std.ArrayList([]const u8) {
     var argv: std.ArrayList([]const u8) = .empty;
     args_iter.reset();
@@ -87,6 +99,7 @@ pub fn main() !void {
     try command_functions.put("exit", &exitFn);
     try command_functions.put("type", &typeFn);
     try command_functions.put("pwd", &pwdFn);
+    try command_functions.put("cd", &cdFn);
 
     while (true) {
         try stdout.print("$ ", .{});
