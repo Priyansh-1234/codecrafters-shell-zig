@@ -1,8 +1,24 @@
 const std = @import("std");
 
 pub fn validateString(arg_str: []const u8) bool {
-    const count = std.mem.count(u8, arg_str, "'");
-    return count % 2 == 0;
+    var in_single_quotes = false;
+    var in_double_quotes = false;
+
+    for (arg_str[0..]) |c| {
+        switch (c) {
+            '\'' => {
+                if (in_double_quotes) continue;
+                in_single_quotes = !in_single_quotes;
+            },
+            '"' => {
+                if (in_single_quotes) continue;
+                in_double_quotes = !in_double_quotes;
+            },
+            else => continue,
+        }
+    }
+
+    return !in_single_quotes and !in_double_quotes;
 }
 
 pub fn parseArgs(allocator: std.mem.Allocator, arg_str: []const u8) !std.ArrayList([]const u8) {
@@ -14,15 +30,27 @@ pub fn parseArgs(allocator: std.mem.Allocator, arg_str: []const u8) !std.ArrayLi
     var stringBuilder: std.ArrayList(u8) = .empty;
     defer stringBuilder.deinit(allocator);
 
-    var in_quotes: bool = false;
+    var in_single_quotes: bool = false;
+    var in_double_quotes: bool = false;
 
     for (arg_str[0..]) |c| {
         switch (c) {
             '\'' => {
-                in_quotes = !in_quotes;
+                if (in_double_quotes) {
+                    try stringBuilder.append(allocator, '\'');
+                } else {
+                    in_single_quotes = !in_single_quotes;
+                }
+            },
+            '"' => {
+                if (in_single_quotes) {
+                    try stringBuilder.append(allocator, '"');
+                } else {
+                    in_double_quotes = !in_double_quotes;
+                }
             },
             ' ', '\t'...'\r' => {
-                if (in_quotes) {
+                if (in_single_quotes or in_double_quotes) {
                     try stringBuilder.append(allocator, c);
                 } else {
                     if (stringBuilder.items.len == 0) continue;
