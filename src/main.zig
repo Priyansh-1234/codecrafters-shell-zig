@@ -17,6 +17,7 @@ var global_command_functions: *std.hash_map.HashMap([]const u8, commandFn, std.h
 fn echoFn(args: []const []const u8) !void {
     const s = try std.mem.join(global_allocator, " ", args);
     defer global_allocator.free(s);
+
     try outstream.print("{s}\n", .{s});
 }
 
@@ -120,9 +121,14 @@ fn cdFn(args: []const []const u8) !void {
     }
 }
 
-fn get_outstream(allocator: std.mem.Allocator, args: []const []const u8) !struct { file_ptr: ?*std.fs.File, index: usize } {
+fn get_streams(allocator: std.mem.Allocator, args: []const []const u8) !struct { outfile_ptr: ?*std.fs.File, errfile_ptr: ?*std.fs.File, index: usize } {
     var outfile_name: []const u8 = undefined;
     var outfile_present: bool = false;
+    var errfile_name: []const u8 = undefined;
+    var errfile_present: bool = false;
+
+    var idx1: usize = args.len;
+    var idx2: usize = args.len;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -130,29 +136,48 @@ fn get_outstream(allocator: std.mem.Allocator, args: []const []const u8) !struct
         if (std.mem.eql(u8, arg, ">") or std.mem.eql(u8, arg, "1>")) {
             outfile_name = args[i + 1];
             outfile_present = true;
-            break;
+            idx1 = i;
+            i += 1;
+        }
+        if (std.mem.eql(u8, "2>", arg)) {
+            errfile_name = args[i + 1];
+            errfile_present = true;
+            idx2 = i;
+            i += 1;
         }
     }
 
-    if (!outfile_present) return .{
-        .file_ptr = null,
-        .index = i,
-    };
-    if (std.fs.path.isAbsolute(outfile_name)) {
-        const file_ptr = try allocator.create(std.fs.File);
-        file_ptr.* = try std.fs.createFileAbsolute(outfile_name, .{});
+    i = @min(@min(i, idx1), idx2);
 
-        return .{
-            .file_ptr = file_ptr,
-            .index = i,
-        };
+    var outfile_ptr: ?*std.fs.File = null;
+    var errfile_ptr: ?*std.fs.File = null;
+
+    if (outfile_present) {
+        outfile_ptr = try allocator.create(std.fs.File);
+    }
+    if (errfile_present) {
+        errfile_ptr = try allocator.create(std.fs.File);
     }
 
-    const file_ptr = try allocator.create(std.fs.File);
-    file_ptr.* = try std.fs.cwd().createFile(outfile_name, .{});
+    if (outfile_ptr) |outfile| {
+        if (std.fs.path.isAbsolute(outfile_name)) {
+            outfile.* = try std.fs.createFileAbsolute(outfile_name, .{});
+        } else {
+            outfile.* = try std.fs.cwd().createFile(outfile_name, .{});
+        }
+    }
+
+    if (errfile_ptr) |errfile| {
+        if (std.fs.path.isAbsolute(errfile_name)) {
+            errfile.* = try std.fs.createFileAbsolute(errfile_name, .{});
+        } else {
+            errfile.* = try std.fs.cwd().createFile(errfile_name, .{});
+        }
+    }
 
     return .{
-        .file_ptr = file_ptr,
+        .outfile_ptr = outfile_ptr,
+        .errfile_ptr = errfile_ptr,
         .index = i,
     };
 }
@@ -196,19 +221,27 @@ pub fn main() !void {
             args.deinit(global_allocator);
         }
 
-        const result = try get_outstream(global_allocator, args.items[0..]);
+        const result = try get_streams(global_allocator, args.items[0..]);
         defer {
             outstream = stdout;
             errstream = stdout;
-            if (result.file_ptr) |file| {
+            if (result.outfile_ptr) |file| {
+                file.close();
+                global_allocator.destroy(file);
+            }
+            if (result.errfile_ptr) |file| {
                 file.close();
                 global_allocator.destroy(file);
             }
         }
 
-        if (result.file_ptr) |file| {
+        if (result.outfile_ptr) |file| {
             var file_writer = file.writerStreaming(&.{});
             outstream = &file_writer.interface;
+        }
+        if (result.errfile_ptr) |file| {
+            var file_writer = file.writerStreaming(&.{});
+            errstream = &file_writer.interface;
         }
 
         const command = args.items[0];
