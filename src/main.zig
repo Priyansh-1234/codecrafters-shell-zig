@@ -4,18 +4,20 @@ const parseArgs = @import("parser.zig").parseArgs;
 var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 const stdout = &stdout_writer.interface;
 
+var outstream: *std.Io.Writer = stdout;
+var errstream: *std.Io.Writer = stdout;
+
 var stdin_buffer: [4096]u8 = undefined;
 var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
 const commandFn = *const fn (args: []const []const u8) anyerror!void;
-var global_command_functions: *std.hash_map.HashMap([]const u8, *const fn ([]const []const u8) anyerror!void, std.hash_map.StringContext, 80) = undefined;
+var global_command_functions: *std.hash_map.HashMap([]const u8, commandFn, std.hash_map.StringContext, 80) = undefined;
 
 fn echoFn(args: []const []const u8) !void {
     const s = try std.mem.join(global_allocator, " ", args);
     defer global_allocator.free(s);
-
-    try stdout.print("{s}\n", .{s});
+    try outstream.print("{s}\n", .{s});
 }
 
 fn exitFn(_: []const []const u8) !void {
@@ -48,24 +50,24 @@ fn isExecutable(allocator: std.mem.Allocator, filename: []const u8) !?[]const u8
 fn typeFn(args: []const []const u8) !void {
     for (args) |arg| {
         if (global_command_functions.get(arg)) |_| {
-            try stdout.print("{s} is a shell builtin\n", .{arg});
+            try outstream.print("{s} is a shell builtin\n", .{arg});
             return;
         }
 
         if (try isExecutable(global_allocator, arg)) |file_path| {
             defer global_allocator.free(file_path);
-            try stdout.print("{s} is {s}\n", .{ arg, file_path });
+            try outstream.print("{s} is {s}\n", .{ arg, file_path });
             return;
         }
 
-        try stdout.print("{s}: not found\n", .{arg});
+        try outstream.print("{s}: not found\n", .{arg});
     }
 }
 
 fn pwdFn(_: []const []const u8) !void {
     var buffer: [1024]u8 = undefined;
     const cwd = try std.fs.cwd().realpath(".", &buffer);
-    try stdout.print("{s}\n", .{cwd});
+    try outstream.print("{s}\n", .{cwd});
 }
 
 fn isPathAbsolute(path: []const u8) !bool {
@@ -77,7 +79,7 @@ fn cdFn(args: []const []const u8) !void {
         const s = try std.mem.join(global_allocator, " ", args);
         defer global_allocator.free(s);
 
-        try stdout.print("cd: {s}: No such file or directory\n", .{s});
+        try outstream.print("cd: {s}: No such file or directory\n", .{s});
         return;
     }
 
@@ -98,7 +100,7 @@ fn cdFn(args: []const []const u8) !void {
     if (flag) {
         var dir = std.fs.openDirAbsolute(path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                try stdout.print("cd: {s}: No such file or directory\n", .{path});
+                try outstream.print("cd: {s}: No such file or directory\n", .{path});
                 return;
             },
             else => return err,
@@ -108,7 +110,7 @@ fn cdFn(args: []const []const u8) !void {
     } else {
         var dir = std.fs.cwd().openDir(path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                try stdout.print("cd: {s}: No such file or directory\n", .{path});
+                try outstream.print("cd: {s}: No such file or directory\n", .{path});
                 return;
             },
             else => return err,
@@ -116,6 +118,43 @@ fn cdFn(args: []const []const u8) !void {
 
         try dir.setAsCwd();
     }
+}
+
+fn get_outstream(allocator: std.mem.Allocator, args: []const []const u8) !struct { file_ptr: ?*std.fs.File, index: usize } {
+    var outfile_name: []const u8 = undefined;
+    var outfile_present: bool = false;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, ">") or std.mem.eql(u8, arg, "1>")) {
+            outfile_name = args[i + 1];
+            outfile_present = true;
+            break;
+        }
+    }
+
+    if (!outfile_present) return .{
+        .file_ptr = null,
+        .index = i,
+    };
+    if (std.fs.path.isAbsolute(outfile_name)) {
+        const file_ptr = try allocator.create(std.fs.File);
+        file_ptr.* = try std.fs.createFileAbsolute(outfile_name, .{});
+
+        return .{
+            .file_ptr = file_ptr,
+            .index = i,
+        };
+    }
+
+    const file_ptr = try allocator.create(std.fs.File);
+    file_ptr.* = try std.fs.cwd().createFile(outfile_name, .{});
+
+    return .{
+        .file_ptr = file_ptr,
+        .index = i,
+    };
 }
 
 var dba = std.heap.DebugAllocator(.{}){};
@@ -136,7 +175,7 @@ pub fn main() !void {
     try command_functions.put("cd", &cdFn);
 
     while (true) {
-        try stdout.print("$ ", .{});
+        try outstream.print("$ ", .{});
 
         var command_input = try stdin.takeDelimiterInclusive('\n');
         if (command_input[command_input.len - 1] == '\n') {
@@ -145,7 +184,7 @@ pub fn main() !void {
 
         var args = parseArgs(global_allocator, command_input) catch |err| switch (err) {
             error.NotValidLine => {
-                try stdout.print("Not Valid Line\n", .{});
+                try errstream.print("Not Valid Line\n", .{});
                 continue;
             },
             else => return err,
@@ -157,8 +196,23 @@ pub fn main() !void {
             args.deinit(global_allocator);
         }
 
+        const result = try get_outstream(global_allocator, args.items[0..]);
+        defer {
+            outstream = stdout;
+            errstream = stdout;
+            if (result.file_ptr) |file| {
+                file.close();
+                global_allocator.destroy(file);
+            }
+        }
+
+        if (result.file_ptr) |file| {
+            var file_writer = file.writerStreaming(&.{});
+            outstream = &file_writer.interface;
+        }
+
         const command = args.items[0];
-        const rest = args.items[1..];
+        const rest = args.items[1..result.index];
 
         if (std.mem.eql(u8, "exit", command)) break;
 
@@ -169,7 +223,7 @@ pub fn main() !void {
             if (file_path) |file_exe| {
                 defer global_allocator.free(file_exe);
 
-                const argv = args.items[0..];
+                const argv = args.items[0..result.index];
 
                 var process = std.process.Child.init(argv, global_allocator);
 
@@ -179,19 +233,29 @@ pub fn main() !void {
 
                 try process.spawn();
 
-                var buffer: [1024]u8 = undefined;
-                var process_reader = process.stdout.?.readerStreaming(&buffer);
-                const process_stdout = &process_reader.interface;
+                var stdout_buffer: [1024]u8 = undefined;
+                var process_stdout_reader = process.stdout.?.readerStreaming(&stdout_buffer);
+                const process_stdout = &process_stdout_reader.interface;
+
+                var stderr_buffer: [1024]u8 = undefined;
+                var process_stderr_reader = process.stderr.?.readerStreaming(&stderr_buffer);
+                const process_stderr = &process_stderr_reader.interface;
 
                 while (process_stdout.takeDelimiterInclusive('\n')) |line| {
-                    try stdout.print("{s}", .{line});
+                    try outstream.print("{s}", .{line});
+                } else |err| {
+                    if (err != error.EndOfStream) return err;
+                }
+
+                while (process_stderr.takeDelimiterInclusive('\n')) |line| {
+                    try errstream.print("{s}", .{line});
                 } else |err| {
                     if (err != error.EndOfStream) return err;
                 }
 
                 _ = try process.wait();
             } else {
-                try stdout.print("{s}: command not found\n", .{command});
+                try outstream.print("{s}: command not found\n", .{command});
             }
         }
     }
