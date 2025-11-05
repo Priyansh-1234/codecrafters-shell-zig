@@ -33,8 +33,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, arg_str: []const u8) !std.ArrayLi
     var in_single_quotes: bool = false;
     var in_double_quotes: bool = false;
 
-    for (arg_str[0..]) |c| {
+    var i: usize = 0;
+    while (i < arg_str.len) : (i += 1) {
+        const c = arg_str[i];
         switch (c) {
+            '\\' => {
+                if (!in_single_quotes and !in_double_quotes and i < arg_str.len - 1) {
+                    const nc = arg_str[i + 1];
+                    try stringBuilder.append(allocator, nc);
+
+                    i += 1;
+                } else {
+                    try stringBuilder.append(allocator, c);
+                }
+            },
             '\'' => {
                 if (in_double_quotes) {
                     try stringBuilder.append(allocator, '\'');
