@@ -1,4 +1,5 @@
 const std = @import("std");
+const parseArgs = @import("parser.zig").parseArgs;
 
 var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 const stdout = &stdout_writer.interface;
@@ -7,14 +8,17 @@ var stdin_buffer: [4096]u8 = undefined;
 var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
-const commandFn = *const fn (args: []const u8) anyerror!void;
-var global_command_functions: *std.hash_map.HashMap([]const u8, *const fn ([]const u8) anyerror!void, std.hash_map.StringContext, 80) = undefined;
+const commandFn = *const fn (args: []const []const u8) anyerror!void;
+var global_command_functions: *std.hash_map.HashMap([]const u8, *const fn ([]const []const u8) anyerror!void, std.hash_map.StringContext, 80) = undefined;
 
-fn echoFn(args: []const u8) !void {
-    try stdout.print("{s}\n", .{args});
+fn echoFn(args: []const []const u8) !void {
+    const s = try std.mem.join(global_allocator, " ", args);
+    defer global_allocator.free(s);
+
+    try stdout.print("{s}\n", .{s});
 }
 
-fn exitFn(_: []const u8) !void {
+fn exitFn(_: []const []const u8) !void {
     return error.TemplateFunction;
 }
 
@@ -41,22 +45,24 @@ fn isExecutable(allocator: std.mem.Allocator, filename: []const u8) !?[]const u8
     return null;
 }
 
-fn typeFn(args: []const u8) !void {
-    if (global_command_functions.get(args)) |_| {
-        try stdout.print("{s} is a shell builtin\n", .{args});
-        return;
-    }
+fn typeFn(args: []const []const u8) !void {
+    for (args) |arg| {
+        if (global_command_functions.get(arg)) |_| {
+            try stdout.print("{s} is a shell builtin\n", .{arg});
+            return;
+        }
 
-    if (try isExecutable(global_allocator, args)) |file_path| {
-        defer global_allocator.free(file_path);
-        try stdout.print("{s} is {s}\n", .{ args, file_path });
-        return;
-    }
+        if (try isExecutable(global_allocator, arg)) |file_path| {
+            defer global_allocator.free(file_path);
+            try stdout.print("{s} is {s}\n", .{ arg, file_path });
+            return;
+        }
 
-    try stdout.print("{s}: not found\n", .{args});
+        try stdout.print("{s}: not found\n", .{arg});
+    }
 }
 
-fn pwdFn(_: []const u8) !void {
+fn pwdFn(_: []const []const u8) !void {
     var buffer: [1024]u8 = undefined;
     const cwd = try std.fs.cwd().realpath(".", &buffer);
     try stdout.print("{s}\n", .{cwd});
@@ -66,8 +72,18 @@ fn isPathAbsolute(path: []const u8) !bool {
     return std.fs.path.isAbsolute(path);
 }
 
-fn cdFn(args: []const u8) !void {
-    if (std.mem.eql(u8, "~", args)) {
+fn cdFn(args: []const []const u8) !void {
+    if (args.len > 1) {
+        const s = try std.mem.join(global_allocator, " ", args);
+        defer global_allocator.free(s);
+
+        try stdout.print("cd: {s}: No such file or directory\n", .{s});
+        return;
+    }
+
+    const path = args[0];
+
+    if (std.mem.eql(u8, "~", path)) {
         const home = try std.process.getEnvVarOwned(global_allocator, "HOME");
         defer global_allocator.free(home);
 
@@ -76,11 +92,13 @@ fn cdFn(args: []const u8) !void {
 
         return;
     }
-    const flag = try isPathAbsolute(args);
+
+    const flag = try isPathAbsolute(path);
+
     if (flag) {
-        var dir = std.fs.openDirAbsolute(args, .{}) catch |err| switch (err) {
+        var dir = std.fs.openDirAbsolute(path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                try stdout.print("cd: {s}: No such file or directory\n", .{args});
+                try stdout.print("cd: {s}: No such file or directory\n", .{path});
                 return;
             },
             else => return err,
@@ -88,9 +106,9 @@ fn cdFn(args: []const u8) !void {
 
         try dir.setAsCwd();
     } else {
-        var dir = std.fs.cwd().openDir(args, .{}) catch |err| switch (err) {
+        var dir = std.fs.cwd().openDir(path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                try stdout.print("cd: {s}: No such file or directory\n", .{args});
+                try stdout.print("cd: {s}: No such file or directory\n", .{path});
                 return;
             },
             else => return err,
@@ -98,16 +116,6 @@ fn cdFn(args: []const u8) !void {
 
         try dir.setAsCwd();
     }
-}
-
-fn parseArgs(allocator: std.mem.Allocator, args_iter: *std.mem.TokenIterator(u8, std.mem.DelimiterType.scalar)) !std.ArrayList([]const u8) {
-    var argv: std.ArrayList([]const u8) = .empty;
-    args_iter.reset();
-    while (args_iter.next()) |arg| {
-        try argv.append(allocator, arg);
-    }
-
-    return argv;
 }
 
 var dba = std.heap.DebugAllocator(.{}){};
@@ -135,11 +143,22 @@ pub fn main() !void {
             command_input = command_input[0 .. command_input.len - 1];
         }
 
-        var arguments = std.mem.tokenizeScalar(u8, command_input, ' ');
-        const command = arguments.next() orelse unreachable;
-        const rest = arguments.rest();
+        var args = parseArgs(global_allocator, command_input) catch |err| switch (err) {
+            error.NotValidLine => {
+                try stdout.print("Not Valid Line\n", .{});
+                continue;
+            },
+            else => return err,
+        };
+        defer {
+            for (args.items[0..]) |arg| {
+                global_allocator.free(arg);
+            }
+            args.deinit(global_allocator);
+        }
 
-        arguments.reset();
+        const command = args.items[0];
+        const rest = args.items[1..];
 
         if (std.mem.eql(u8, "exit", command)) break;
 
@@ -149,9 +168,6 @@ pub fn main() !void {
             const file_path = try isExecutable(global_allocator, command);
             if (file_path) |file_exe| {
                 defer global_allocator.free(file_exe);
-
-                var args = try parseArgs(global_allocator, &arguments);
-                defer args.deinit(global_allocator);
 
                 const argv = args.items[0..];
 
