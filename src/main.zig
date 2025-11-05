@@ -124,8 +124,11 @@ fn cdFn(args: []const []const u8) !void {
 fn get_streams(allocator: std.mem.Allocator, args: []const []const u8) !struct { outfile_ptr: ?*std.fs.File, errfile_ptr: ?*std.fs.File, index: usize } {
     var outfile_name: []const u8 = undefined;
     var outfile_present: bool = false;
+    var outfile_append: bool = false;
+
     var errfile_name: []const u8 = undefined;
     var errfile_present: bool = false;
+    var errfile_append: bool = false;
 
     var idx1: usize = args.len;
     var idx2: usize = args.len;
@@ -138,10 +141,21 @@ fn get_streams(allocator: std.mem.Allocator, args: []const []const u8) !struct {
             outfile_present = true;
             idx1 = i;
             i += 1;
-        }
-        if (std.mem.eql(u8, "2>", arg)) {
+        } else if (std.mem.eql(u8, "2>", arg)) {
             errfile_name = args[i + 1];
             errfile_present = true;
+            idx2 = i;
+            i += 1;
+        } else if (std.mem.eql(u8, arg, ">>") or std.mem.eql(u8, arg, "1>>")) {
+            outfile_name = args[i + 1];
+            outfile_present = true;
+            outfile_append = true;
+            idx1 = i;
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "2>>")) {
+            errfile_name = args[i + 1];
+            errfile_present = true;
+            errfile_append = true;
             idx2 = i;
             i += 1;
         }
@@ -161,17 +175,23 @@ fn get_streams(allocator: std.mem.Allocator, args: []const []const u8) !struct {
 
     if (outfile_ptr) |outfile| {
         if (std.fs.path.isAbsolute(outfile_name)) {
-            outfile.* = try std.fs.createFileAbsolute(outfile_name, .{});
+            outfile.* = try std.fs.createFileAbsolute(outfile_name, .{ .truncate = !outfile_append });
         } else {
-            outfile.* = try std.fs.cwd().createFile(outfile_name, .{});
+            outfile.* = try std.fs.cwd().createFile(outfile_name, .{ .truncate = !outfile_append });
+        }
+        if (outfile_append) {
+            try outfile.seekFromEnd(0);
         }
     }
 
     if (errfile_ptr) |errfile| {
         if (std.fs.path.isAbsolute(errfile_name)) {
-            errfile.* = try std.fs.createFileAbsolute(errfile_name, .{});
+            errfile.* = try std.fs.createFileAbsolute(errfile_name, .{ .truncate = !errfile_append });
         } else {
-            errfile.* = try std.fs.cwd().createFile(errfile_name, .{});
+            errfile.* = try std.fs.cwd().createFile(errfile_name, .{ .truncate = !errfile_append });
+        }
+        if (errfile_append) {
+            try errfile.seekFromEnd(0);
         }
     }
 

@@ -1,7 +1,2 @@
-total 24
-drwx------ 2 root     root     4096 Nov  5 17:08 snap-private-tmp
-drwx------ 3 root     root     4096 Nov  5 17:08 systemd-private-152f46e30eef48e59362eb6d01d875c7-systemd-logind.service-7u9t9q
-drwx------ 3 root     root     4096 Nov  5 17:08 systemd-private-152f46e30eef48e59362eb6d01d875c7-systemd-resolved.service-ZAnm6F
-drwx------ 3 root     root     4096 Nov  5 17:08 systemd-private-152f46e30eef48e59362eb6d01d875c7-systemd-timesyncd.service-Xdwq58
-drwx------ 3 root     root     4096 Nov  5 17:08 systemd-private-152f46e30eef48e59362eb6d01d875c7-wsl-pro.service-7rfzsA
-drwx------ 2 priyansh priyansh 4096 Nov  5 17:11 tmux-1000
+hello
+hello
