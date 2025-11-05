@@ -4,8 +4,21 @@ pub fn validateString(arg_str: []const u8) bool {
     var in_single_quotes = false;
     var in_double_quotes = false;
 
-    for (arg_str[0..]) |c| {
+    var i: usize = 0;
+    while (i < arg_str.len) : (i += 1) {
+        const c = arg_str[i];
         switch (c) {
+            '\\' => {
+                if (i < arg_str.len - 1) {
+                    const nc = arg_str[i + 1];
+                    switch (nc) {
+                        '"', '\\' => {
+                            i += 1;
+                        },
+                        else => continue,
+                    }
+                }
+            },
             '\'' => {
                 if (in_double_quotes) continue;
                 in_single_quotes = !in_single_quotes;
@@ -40,9 +53,25 @@ pub fn parseArgs(allocator: std.mem.Allocator, arg_str: []const u8) !std.ArrayLi
             '\\' => {
                 if (!in_single_quotes and !in_double_quotes and i < arg_str.len - 1) {
                     const nc = arg_str[i + 1];
-                    try stringBuilder.append(allocator, nc);
+                    defer i += 1;
 
-                    i += 1;
+                    try stringBuilder.append(allocator, nc);
+                } else if (in_double_quotes and i < arg_str.len - 1) {
+                    const nc = arg_str[i + 1];
+
+                    switch (nc) {
+                        '"' => {
+                            try stringBuilder.append(allocator, '"');
+                            i += 1;
+                        },
+                        '\\' => {
+                            try stringBuilder.append(allocator, '\\');
+                            i += 1;
+                        },
+                        else => {
+                            try stringBuilder.append(allocator, c);
+                        },
+                    }
                 } else {
                     try stringBuilder.append(allocator, c);
                 }
