@@ -26,9 +26,28 @@ const stdin = &stdin_reader.interface;
 var outstream: *std.Io.Writer = stdout;
 var errstream: *std.Io.Writer = stderr;
 
-fn buildTrie(builtins: shell_builtins, trie: *Trie) !void {
+fn buildTrie(builtins: shell_builtins, trie: *Trie, path: []const u8) !void {
     for (builtins.shell_functions[0..]) |shell_function| {
         try trie.insert(shell_function);
+    }
+
+    var iter = std.mem.splitScalar(u8, path, std.fs.path.delimiter);
+
+    while (iter.next()) |dir| {
+        var directory = if (std.fs.path.isAbsolute(dir)) std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        } else continue;
+        defer directory.close();
+
+        var iterator = directory.iterate();
+        while (try iterator.next()) |entry| {
+            if (entry.kind != .file) continue;
+            const stat = directory.statFile(entry.name) catch continue;
+            if (stat.mode & (std.posix.S.IXUSR | std.posix.S.IXGRP | std.posix.S.IXOTH) != 0) {
+                try trie.insert(entry.name);
+            }
+        }
     }
 }
 
@@ -54,11 +73,13 @@ pub fn main() !void {
     const allocator = dba.allocator();
 
     const builtins = shell_builtins.init(allocator);
+    const path = try std.process.getEnvVarOwned(allocator, "PATH");
+    defer allocator.free(path);
 
     var trie = try Trie.init(allocator);
     defer trie.deinit();
 
-    try buildTrie(builtins, &trie);
+    try buildTrie(builtins, &trie, path);
 
     var terminal = try Terminal.init(stdin, stdout);
     var rl = ReadLine.init(allocator, &terminal, &auto_complete_function, &trie);
