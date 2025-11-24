@@ -14,9 +14,6 @@ pub fn build(b: *std.Build) void {
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
 
-    exe.root_module.link_libc = true;
-    exe.root_module.linkSystemLibrary("readline", .{});
-
     b.installArtifact(exe);
 
     // This *creates* a Run step in the build graph, to be executed when another

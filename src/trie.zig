@@ -83,7 +83,7 @@ pub const Trie = struct {
         return true;
     }
 
-    pub fn complete(self: *const Self, prefix: []const u8) !?[]const u8 {
+    pub fn complete(self: *const Self, prefix: []const u8, allocator: Allocator) !?[]const u8 {
         var current = self.root;
         for (prefix) |ch| {
             const child = current.children.get(ch) orelse return null;
@@ -91,28 +91,28 @@ pub const Trie = struct {
         }
 
         var result: ArrayList(u8) = .empty;
-        defer result.deinit(self.allocator);
+        defer result.deinit(allocator);
 
-        try result.appendSlice(self.allocator, prefix);
+        try result.appendSlice(allocator, prefix);
 
         if (current.is_end) {
-            return try result.toOwnedSlice(self.allocator);
+            return try result.toOwnedSlice(allocator);
         }
 
-        if (try self.dfsFirst(current, &result)) {
-            return try result.toOwnedSlice(self.allocator);
+        if (try self.dfsFirst(current, &result, allocator)) {
+            return try result.toOwnedSlice(allocator);
         }
 
         return null;
     }
 
-    fn dfsFirst(self: *const Self, node: *Node, buffer: *ArrayList(u8)) !bool {
+    fn dfsFirst(self: *const Self, node: *Node, buffer: *ArrayList(u8), allocator: Allocator) !bool {
         var keys: ArrayList(u8) = .empty;
-        defer keys.deinit(self.allocator);
+        defer keys.deinit(allocator);
 
         var it = node.children.keyIterator();
         while (it.next()) |key| {
-            try keys.append(self.allocator, key.*);
+            try keys.append(allocator, key.*);
         }
 
         std.mem.sort(u8, keys.items[0..], {}, std.sort.asc(u8));
@@ -120,13 +120,14 @@ pub const Trie = struct {
         for (keys.items[0..]) |key| {
             const child = node.children.get(key) orelse unreachable;
 
-            try buffer.append(self.allocator, key);
+            try buffer.append(allocator, key);
 
             if (child.is_end) {
+                if (child.children.count() == 0) try buffer.append(allocator, ' ');
                 return true;
             }
 
-            if (try self.dfsFirst(child, buffer)) {
+            if (try self.dfsFirst(child, buffer, allocator)) {
                 return true;
             }
 

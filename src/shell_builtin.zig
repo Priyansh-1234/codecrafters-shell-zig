@@ -1,7 +1,9 @@
 const std = @import("std");
-const isExecutable = @import("utils.zig").isExecutable;
+
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
+
+const isExecutable = @import("utils.zig").isExecutable;
 
 pub const shell_builtin = struct {
     const Self = @This();
@@ -58,6 +60,7 @@ pub const shell_builtin = struct {
             return;
         }
 
+        if (args.len == 0) return;
         const path = args[0];
 
         if (std.mem.eql(u8, "~", path)) {

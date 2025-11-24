@@ -4,12 +4,6 @@ const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 
-const c = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("readline/readline.h");
-    @cInclude("readline/history.h");
-});
-
 pub fn isExecutable(allocator: Allocator, filename: []const u8) !?[]const u8 {
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);
@@ -151,74 +145,3 @@ pub fn runChildProcess(allocator: Allocator, argv: []const []const u8, outstream
 
     _ = try process.wait();
 }
-
-threadlocal var completion_context: ?*const readUtils = null;
-
-pub const readUtils = struct {
-    trie: *Trie,
-    allocator: Allocator,
-
-    pub fn init(allocator: Allocator, trie: *Trie) !readUtils {
-        return .{
-            .trie = trie,
-            .allocator = allocator,
-        };
-    }
-
-    fn completionGenerator(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
-        if (completion_context) |ctx| {
-            if (state == 0) {
-                const prefix = std.mem.span(text);
-                const result = ctx.autoComplete(prefix);
-                defer ctx.allocator.free(result.result);
-
-                if (result.success) {
-                    const completion = std.c.malloc(result.result.len + 1) orelse return null;
-                    const completion_slice: [*]u8 = @ptrCast(completion);
-
-                    @memcpy(completion_slice[0..result.result.len], result.result[0..]);
-                    completion_slice[result.result.len] = 0;
-
-                    return @ptrCast(completion);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    fn completionFunction(text: [*c]const u8, start: c_int, end: c_int) callconv(.c) [*c][*c]u8 {
-        _ = start;
-        _ = end;
-        if (text == null or text[0] == 0) return null;
-
-        return c.rl_completion_matches(text, &completionGenerator);
-    }
-
-    fn autoComplete(self: *const readUtils, prefix: []const u8) struct { success: bool, result: []const u8 } {
-        const value = self.trie.complete(prefix) catch null orelse return .{
-            .success = false,
-            .result = "",
-        };
-        return .{
-            .success = true,
-            .result = value,
-        };
-    }
-
-    pub fn readline(self: *const readUtils, allocator: Allocator, reader: *Reader) ![]const u8 {
-        _ = reader;
-
-        completion_context = self;
-        c.rl_attempted_completion_function = &completionFunction;
-
-        const input = c.readline("$ ");
-        defer std.c.free(input);
-
-        if (input == null) return error.CloseTerminal;
-        if (input[0] != 0) _ = c.add_history(input);
-
-        const command_input = try allocator.dupe(u8, std.mem.span(input));
-        return command_input;
-    }
-};

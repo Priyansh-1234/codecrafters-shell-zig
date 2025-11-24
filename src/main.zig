@@ -1,10 +1,14 @@
 // --- File Imports --- //
 const std = @import("std");
 const utils = @import("utils.zig");
-const parseArgs = @import("parser.zig").parseArgs;
+
 const shell_builtins = @import("shell_builtin.zig").shell_builtin;
 const Trie = @import("trie.zig").Trie;
+const ReadLine = @import("readline.zig").ReadLine;
+const Terminal = @import("terminal.zig").Terminal;
+const Allocator = std.mem.Allocator;
 
+const parseArgs = @import("parser.zig").parseArgs;
 const assert = std.debug.assert;
 
 // --- Setting up the standard out and standard in and standard err --- //
@@ -28,6 +32,19 @@ fn buildTrie(builtins: shell_builtins, trie: *Trie) !void {
     }
 }
 
+fn auto_complete_function(trie: *const Trie, line: []const u8, allocator: Allocator) ![]const u8 {
+    var i: usize = line.len;
+    while (i > 0 and line[i - 1] != ' ') : (i -= 1) {}
+    if (i == line.len) return try allocator.dupe(u8, line);
+
+    const prefix = line[i..];
+
+    const completed = try trie.complete(prefix, allocator);
+    if (completed == null) return try allocator.dupe(u8, line);
+    defer allocator.free(completed.?);
+
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ line[0..i], completed.? });
+}
 pub fn main() !void {
     var dba = std.heap.DebugAllocator(.{}){};
     defer assert(dba.deinit() == .ok);
@@ -40,13 +57,12 @@ pub fn main() !void {
 
     try buildTrie(builtins, &trie);
 
-    const read_utils = try utils.readUtils.init(allocator, &trie);
+    var terminal = try Terminal.init(stdin, stdout);
+    var rl = ReadLine.init(allocator, &terminal, &auto_complete_function, &trie);
+    defer rl.deinit();
 
     while (true) {
-        const command_input = read_utils.readline(allocator, stdin) catch |err| switch (err) {
-            error.CloseTerminal => break,
-            else => return err,
-        };
+        const command_input = try rl.readline("$ ") orelse continue;
         defer allocator.free(command_input);
 
         if (command_input.len == 0) continue;
