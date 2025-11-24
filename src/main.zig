@@ -35,13 +35,16 @@ fn buildTrie(builtins: shell_builtins, trie: *Trie) !void {
 fn auto_complete_function(trie: *const Trie, line: []const u8, allocator: Allocator) ![]const u8 {
     var i: usize = line.len;
     while (i > 0 and line[i - 1] != ' ') : (i -= 1) {}
-    if (i == line.len) return try allocator.dupe(u8, line);
 
     const prefix = line[i..];
 
     const completed = try trie.complete(prefix, allocator);
-    if (completed == null) return try allocator.dupe(u8, line);
-    defer allocator.free(completed.?);
+    defer {
+        if (completed) |proper_completed| allocator.free(proper_completed);
+    }
+    if (i == line.len or completed == null) {
+        return error.InvalidComplete;
+    }
 
     return try std.fmt.allocPrint(allocator, "{s}{s}", .{ line[0..i], completed.? });
 }

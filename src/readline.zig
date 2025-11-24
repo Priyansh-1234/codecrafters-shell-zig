@@ -152,7 +152,13 @@ pub const ReadLine = struct {
                     },
 
                     '\t' => {
-                        const line = try self.auto_complete_function(self.trie, self.buffer.items, self.allocator);
+                        const line = self.auto_complete_function(self.trie, self.buffer.items, self.allocator) catch |err| switch (err) {
+                            error.InvalidComplete => {
+                                try self.terminal.writer.writeByte('\x07');
+                                return null;
+                            },
+                            else => return err,
+                        };
                         defer self.allocator.free(line);
 
                         self.buffer.clearAndFree(self.allocator);
