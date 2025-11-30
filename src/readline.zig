@@ -205,10 +205,6 @@ pub const ReadLine = struct {
                         if (!std.mem.eql(u8, suggestionResult.autofill, word)) {
                             try self.buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
 
-                            if (suggestionResult.suggestions.len == 1) {
-                                try self.buffer.append(self.allocator, ' ');
-                            }
-
                             return null;
                         }
 

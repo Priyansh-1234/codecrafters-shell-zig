@@ -110,15 +110,17 @@ pub const Trie = struct {
             const child = current.children.get(key.*) orelse unreachable;
 
             try buffer.append(allocator, key.*);
-            if (child.is_end) {
-                try result.append(allocator, try allocator.dupe(u8, buffer.items));
-            }
-
             current = child;
+
+            if (child.is_end) break;
         }
 
         if (current.children.count() > 1) {
             try self.trieDFS(current, &buffer, &result, allocator);
+        }
+
+        if (current.children.count() == 0) {
+            try buffer.append(allocator, ' ');
         }
 
         return .{
