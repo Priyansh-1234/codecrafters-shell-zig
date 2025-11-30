@@ -4,6 +4,11 @@ const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 
+pub const autofillSuggestion = struct {
+    suggestions: [][]u8,
+    autofill: []u8,
+};
+
 pub fn isExecutable(allocator: Allocator, filename: []const u8) !?[]const u8 {
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);

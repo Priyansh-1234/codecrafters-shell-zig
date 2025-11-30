@@ -3,6 +3,7 @@ main
 zig-cache/
 .zig-cache/
 zig-out/
+myenv/
 
 # Compiled binary output
 bin/

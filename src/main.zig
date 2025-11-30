@@ -51,21 +51,14 @@ fn buildTrie(builtins: shell_builtins, trie: *Trie, path: []const u8) !void {
     }
 }
 
-fn auto_complete_function(trie: *const Trie, line: []const u8, allocator: Allocator) ![]const u8 {
-    var i: usize = line.len;
-    while (i > 0 and line[i - 1] != ' ') : (i -= 1) {}
+fn auto_complete_function(trie: *const Trie, word: []const u8, allocator: Allocator) !utils.autofillSuggestion {
+    const result = try trie.complete(word, allocator);
 
-    const prefix = line[i..];
-
-    const completed = try trie.complete(prefix, allocator);
-    defer {
-        if (completed) |proper_completed| allocator.free(proper_completed);
-    }
-    if (i == line.len or completed == null) {
+    if (result == null) {
         return error.InvalidComplete;
     }
 
-    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ line[0..i], completed.? });
+    return result orelse unreachable;
 }
 pub fn main() !void {
     var dba = std.heap.DebugAllocator(.{}){};

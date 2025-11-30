@@ -1,11 +1,13 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 
 const Trie = @import("trie.zig").Trie;
 const Terminal = @import("terminal.zig").Terminal;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const Writer = std.Io.Writer;
 
-const auto_comp_func_type = *const fn (trie: *const Trie, []const u8, Allocator) anyerror![]const u8;
+const auto_comp_func_type = *const fn (trie: *const Trie, []const u8, Allocator) anyerror!utils.autofillSuggestion;
 
 pub const ReadLine = struct {
     const Self = @This();
@@ -134,6 +136,28 @@ pub const ReadLine = struct {
         return error.NotImplemented;
     }
 
+    fn getWord(self: *Self) ?struct { word: []const u8, index: usize } {
+        if (self.buffer.items.len == 0) return null;
+
+        var i: usize = 0;
+        while (i > 0 and self.buffer.items[i - 1] != ' ') : (i -= 1) {}
+
+        return .{
+            .word = self.buffer.items[i..],
+            .index = i,
+        };
+    }
+
+    fn displaySuggestions(self: *const Self, suggestions: []const []const u8) !void {
+        try self.terminal.writer.writeByte('\n');
+        for (suggestions[0..]) |suggestion| {
+            _ = try self.terminal.writer.write(suggestion);
+            _ = try self.terminal.writer.write("  ");
+        }
+
+        try self.terminal.writer.writeByte('\n');
+    }
+
     fn processKey(self: *Self) !?[]const u8 {
         const key = try self.readKey();
 
@@ -152,18 +176,48 @@ pub const ReadLine = struct {
                     },
 
                     '\t' => {
-                        const line = self.auto_complete_function(self.trie, self.buffer.items, self.allocator) catch |err| switch (err) {
+                        const wordResult = self.getWord();
+                        if (wordResult == null) {
+                            try self.terminal.writer.writeByte('\x07');
+                            return null;
+                        }
+                        defer self.cursor = self.buffer.items.len;
+
+                        const word = wordResult.?.word;
+                        const index = wordResult.?.index;
+
+                        const suggestionResult = self.auto_complete_function(self.trie, word, self.allocator) catch |err| switch (err) {
                             error.InvalidComplete => {
                                 try self.terminal.writer.writeByte('\x07');
                                 return null;
                             },
                             else => return err,
                         };
-                        defer self.allocator.free(line);
+                        defer {
+                            for (suggestionResult.suggestions[0..]) |suggestion| {
+                                self.allocator.free(suggestion);
+                            }
+                            self.allocator.free(suggestionResult.suggestions);
 
-                        self.buffer.clearAndFree(self.allocator);
-                        try self.buffer.appendSlice(self.allocator, line);
-                        self.cursor = line.len;
+                            self.allocator.free(suggestionResult.autofill);
+                        }
+
+                        if (!std.mem.eql(u8, suggestionResult.autofill, word)) {
+                            try self.buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
+
+                            if (suggestionResult.suggestions.len == 1) {
+                                try self.buffer.append(self.allocator, ' ');
+                            }
+
+                            return null;
+                        }
+
+                        try self.terminal.writer.writeByte('\x07');
+
+                        const newKey = try self.readKey();
+                        if (newKey != .char or newKey.char != '\t') return null;
+
+                        try self.displaySuggestions(suggestionResult.suggestions);
                     },
 
                     else => {

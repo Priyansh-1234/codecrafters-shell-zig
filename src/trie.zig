@@ -1,7 +1,10 @@
 const std = @import("std");
+const utils = @import("utils.zig");
+
 const Allocator = std.mem.Allocator;
 const HashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
+
 const assert = std.debug.assert;
 
 pub const Trie = struct {
@@ -83,35 +86,57 @@ pub const Trie = struct {
         return true;
     }
 
-    pub fn complete(self: *const Self, prefix: []const u8, allocator: Allocator) !?[]const u8 {
+    pub fn complete(self: *const Self, prefix: []const u8, allocator: Allocator) !?utils.autofillSuggestion {
         var current = self.root;
         for (prefix) |ch| {
             const child = current.children.get(ch) orelse return null;
             current = child;
         }
 
-        var result: ArrayList(u8) = .empty;
+        var result: ArrayList([]u8) = .empty;
         defer result.deinit(allocator);
 
-        try result.appendSlice(allocator, prefix);
+        var buffer: ArrayList(u8) = .empty;
+        defer buffer.deinit(allocator);
 
+        try buffer.appendSlice(allocator, prefix[0..]);
         if (current.is_end) {
-            return try result.toOwnedSlice(allocator);
+            try result.append(allocator, try allocator.dupe(u8, buffer.items));
         }
 
-        if (try self.dfsFirst(current, &result, allocator)) {
-            return try result.toOwnedSlice(allocator);
+        while (current.children.count() == 1) {
+            var keyIter = current.children.keyIterator();
+            const key = keyIter.next() orelse unreachable;
+            const child = current.children.get(key.*) orelse unreachable;
+
+            try buffer.append(allocator, key.*);
+            if (child.is_end) {
+                try result.append(allocator, try allocator.dupe(u8, buffer.items));
+            }
+
+            current = child;
         }
 
-        return null;
+        if (current.children.count() > 1) {
+            try self.trieDFS(current, &buffer, &result, allocator);
+        }
+
+        return .{
+            .suggestions = try result.toOwnedSlice(allocator),
+            .autofill = try buffer.toOwnedSlice(allocator),
+        };
     }
+    fn trieDFS(self: *const Self, node: *Node, buffer: *ArrayList(u8), result: *ArrayList([]u8), allocator: Allocator) !void {
+        if (node.children.count() == 0) {
+            try result.append(allocator, try allocator.dupe(u8, buffer.items));
+            return;
+        }
 
-    fn dfsFirst(self: *const Self, node: *Node, buffer: *ArrayList(u8), allocator: Allocator) !bool {
         var keys: ArrayList(u8) = .empty;
         defer keys.deinit(allocator);
 
-        var it = node.children.keyIterator();
-        while (it.next()) |key| {
+        var iter = node.children.keyIterator();
+        while (iter.next()) |key| {
             try keys.append(allocator, key.*);
         }
 
@@ -122,18 +147,13 @@ pub const Trie = struct {
 
             try buffer.append(allocator, key);
 
-            if (child.is_end) {
-                if (child.children.count() == 0) try buffer.append(allocator, ' ');
-                return true;
+            if (child.is_end and child.children.count() > 0) {
+                try result.append(allocator, try allocator.dupe(u8, buffer.items));
             }
 
-            if (try self.dfsFirst(child, buffer, allocator)) {
-                return true;
-            }
+            try self.trieDFS(child, buffer, result, allocator);
 
             _ = buffer.pop();
         }
-
-        return false;
     }
 };
