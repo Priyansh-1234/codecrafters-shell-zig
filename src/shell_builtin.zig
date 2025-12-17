@@ -1,9 +1,12 @@
 const std = @import("std");
+const utils = @import("utils.zig");
+
+const posix = std.posix;
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
-const isExecutable = @import("utils.zig").isExecutable;
+const getExecutable = utils.getExecutable;
 
 pub const shell_builtin = struct {
     const Self = @This();
@@ -25,23 +28,23 @@ pub const shell_builtin = struct {
     }
 
     fn exitFn(_: *const Self, _: []const []const u8, _: *Writer) !void {
-        return error.TemplateFunction;
+        posix.exit(0);
     }
 
-    fn typeFn(self: *const Self, args: []const []const u8, outstream: *Writer) !void {
+    fn typeFn(self: *const Self, args: []const []const u8, outstream: *Writer, errstream: *Writer) !void {
         for (args) |arg| {
             if (self.match(arg)) {
                 try outstream.print("{s} is a shell builtin\n", .{arg});
                 return;
             }
 
-            if (try isExecutable(self.allocator, arg)) |file_path| {
+            if (try getExecutable(self.allocator, arg)) |file_path| {
                 defer self.allocator.free(file_path);
                 try outstream.print("{s} is {s}\n", .{ arg, file_path });
                 return;
             }
 
-            try outstream.print("{s}: not found\n", .{arg});
+            try errstream.print("{s}: not found\n", .{arg});
         }
     }
 
@@ -51,12 +54,12 @@ pub const shell_builtin = struct {
         try outstream.print("{s}\n", .{cwd});
     }
 
-    fn cdFn(self: *const Self, args: []const []const u8, outstream: *Writer) !void {
+    fn cdFn(self: *const Self, args: []const []const u8, outstream: *Writer, errstream: *Writer) !void {
         if (args.len > 1) {
             const s = try std.mem.join(self.allocator, " ", args);
             defer self.allocator.free(s);
 
-            try outstream.print("cd: {s}: No such file or directory\n", .{s});
+            try errstream.print("cd: {s}: No such file or directory\n", .{s});
             return;
         }
 
@@ -88,7 +91,7 @@ pub const shell_builtin = struct {
         } else {
             var dir = std.fs.cwd().openDir(path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
-                    try outstream.print("cd: {s}: No such file or directory\n", .{path});
+                    try errstream.print("cd: {s}: No such file or directory\n", .{path});
                     return;
                 },
                 else => return err,
@@ -105,12 +108,12 @@ pub const shell_builtin = struct {
         return false;
     }
 
-    pub fn call(self: *const Self, function_name: []const u8, argv: []const []const u8, outstream: *Writer) anyerror!void {
+    pub fn call(self: *const Self, function_name: []const u8, argv: []const []const u8, outstream: *Writer, errstream: *Writer) !void {
         if (std.mem.eql(u8, "exit", function_name)) return self.exitFn(argv[1..], outstream);
         if (std.mem.eql(u8, "echo", function_name)) return self.echoFn(argv[1..], outstream);
-        if (std.mem.eql(u8, "type", function_name)) return self.typeFn(argv[1..], outstream);
+        if (std.mem.eql(u8, "type", function_name)) return self.typeFn(argv[1..], outstream, errstream);
         if (std.mem.eql(u8, "pwd", function_name)) return self.pwdFn(argv[1..], outstream);
-        if (std.mem.eql(u8, "cd", function_name)) return self.cdFn(argv[1..], outstream);
+        if (std.mem.eql(u8, "cd", function_name)) return self.cdFn(argv[1..], outstream, errstream);
         return error.NotBuiltinFuncion;
     }
 };

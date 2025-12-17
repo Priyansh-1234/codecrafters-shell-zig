@@ -158,9 +158,7 @@ pub const ReadLine = struct {
         try self.terminal.writer.writeByte('\n');
     }
 
-    fn processKey(self: *Self) !?[]const u8 {
-        const key = try self.readKey();
-
+    fn handleKey(self: *Self, key: Key) !?[]const u8 {
         switch (key) {
             .char => |ch| {
                 switch (ch) {
@@ -211,7 +209,9 @@ pub const ReadLine = struct {
                         try self.terminal.writer.writeByte('\x07');
 
                         const newKey = try self.readKey();
-                        if (newKey != .char or newKey.char != '\t') return null;
+                        if (newKey != .char or newKey.char != '\t') {
+                            return self.handleKey(newKey);
+                        }
 
                         try self.displaySuggestions(suggestionResult.suggestions);
                     },
@@ -234,6 +234,91 @@ pub const ReadLine = struct {
         }
 
         return null;
+    }
+
+    fn processKey(self: *Self) !?[]const u8 {
+        const key = try self.readKey();
+        return self.handleKey(key);
+
+        //        switch (key) {
+        //            .char => |ch| {
+        //                switch (ch) {
+        //                    control_key('c') => return error.SIGKILL,
+        //                    control_key('a') => self.cursor = 0,
+        //                    control_key('e') => self.cursor = self.buffer.items.len,
+        //                    control_key('f') => self.moveCursor(.ARROW_RIGHT),
+        //                    control_key('b') => self.moveCursor(.ARROW_LEFT),
+        //                    control_key('d') => self.deleteCharacter(.DEL_KEY),
+        //
+        //                    '\n' => {
+        //                        return try self.buffer.toOwnedSlice(self.allocator);
+        //                    },
+        //
+        //                    '\t' => {
+        //                        const wordResult = self.getWord();
+        //                        if (wordResult == null) {
+        //                            try self.terminal.writer.writeByte('\x07');
+        //                            return null;
+        //                        }
+        //                        defer self.cursor = self.buffer.items.len;
+        //
+        //                        const word = wordResult.?.word;
+        //                        const index = wordResult.?.index;
+        //
+        //                        const suggestionResult = self.auto_complete_function(self.trie, word, self.allocator) catch |err| switch (err) {
+        //                            error.InvalidComplete => {
+        //                                try self.terminal.writer.writeByte('\x07');
+        //                                return null;
+        //                            },
+        //                            else => return err,
+        //                        };
+        //                        defer {
+        //                            for (suggestionResult.suggestions[0..]) |suggestion| {
+        //                                self.allocator.free(suggestion);
+        //                            }
+        //                            self.allocator.free(suggestionResult.suggestions);
+        //
+        //                            self.allocator.free(suggestionResult.autofill);
+        //                        }
+        //
+        //                        if (!std.mem.eql(u8, suggestionResult.autofill, word)) {
+        //                            try self.buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
+        //
+        //                            return null;
+        //                        }
+        //
+        //                        try self.terminal.writer.writeByte('\x07');
+        //
+        //                        const newKey = try self.readKey();
+        //                        if (newKey != .char or newKey.char != '\t') {
+        //                            if (newKey == .char) {
+        //                                try self.buffer.append(self.allocator, newKey.char);
+        //                                self.cursor += 1;
+        //                            }
+        //                            return null;
+        //                        }
+        //
+        //                        try self.displaySuggestions(suggestionResult.suggestions);
+        //                    },
+        //
+        //                    else => {
+        //                        try self.buffer.append(self.allocator, ch);
+        //                        self.cursor += 1;
+        //                    },
+        //                }
+        //            },
+        //            .ARROW_UP, .ARROW_DOWN => self.changeCommand(key) catch {},
+        //
+        //            .ARROW_LEFT, .ARROW_RIGHT => self.moveCursor(key),
+        //
+        //            .HOME_KEY => self.cursor = 0,
+        //
+        //            .END_KEY => self.cursor = self.buffer.items.len,
+        //
+        //            .BACKSPACE, .DEL_KEY => self.deleteCharacter(key),
+        //        }
+        //
+        //        return null;
     }
 
     pub fn readline(self: *Self, prefix: []const u8) !?[]const u8 {

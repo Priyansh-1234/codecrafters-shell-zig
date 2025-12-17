@@ -1,6 +1,9 @@
 // --- File Imports --- //
 const std = @import("std");
 const utils = @import("utils.zig");
+const Parser = @import("parser.zig");
+
+const posix = std.posix;
 
 const shell_builtins = @import("shell_builtin.zig").shell_builtin;
 const Trie = @import("trie.zig").Trie;
@@ -8,100 +11,89 @@ const ReadLine = @import("readline.zig").ReadLine;
 const Terminal = @import("terminal.zig").Terminal;
 const Allocator = std.mem.Allocator;
 
-const parseArgs = @import("parser.zig").parseArgs;
 const assert = std.debug.assert;
 
-// --- Setting up the standard out and standard in and standard err --- //
-var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
-const stdout = &stdout_writer.interface;
-
-var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
-const stderr = &stderr_writer.interface;
-
-var stdin_buffer: [4096]u8 = undefined;
-var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
-const stdin = &stdin_reader.interface;
-
 // --- The output streams which can change upon redirection --- //
-var outstream: *std.Io.Writer = stdout;
-var errstream: *std.Io.Writer = stderr;
 
-fn buildTrie(builtins: shell_builtins, trie: *Trie, path: []const u8) !void {
-    for (builtins.shell_functions[0..]) |shell_function| {
-        try trie.insert(shell_function);
-    }
-
-    var iter = std.mem.splitScalar(u8, path, std.fs.path.delimiter);
-
-    while (iter.next()) |dir| {
-        var directory = if (std.fs.path.isAbsolute(dir)) std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound => continue,
-            else => return err,
-        } else continue;
-        defer directory.close();
-
-        var iterator = directory.iterate();
-        while (try iterator.next()) |entry| {
-            if (entry.kind != .file) continue;
-            const stat = directory.statFile(entry.name) catch continue;
-            if (stat.mode & (std.posix.S.IXUSR | std.posix.S.IXGRP | std.posix.S.IXOTH) != 0) {
-                try trie.insert(entry.name);
-            }
-        }
-    }
-}
-
-fn auto_complete_function(trie: *const Trie, word: []const u8, allocator: Allocator) !utils.autofillSuggestion {
-    const result = try trie.complete(word, allocator);
-
-    if (result == null) {
-        return error.InvalidComplete;
-    }
-
-    return result orelse unreachable;
-}
 pub fn main() !void {
     var dba = std.heap.DebugAllocator(.{}){};
     defer assert(dba.deinit() == .ok);
     const allocator = dba.allocator();
 
+    // --- Setting up the standard out and standard in and standard err --- //
+    var stdout = std.fs.File.stdout();
+    var stdout_writer = stdout.writerStreaming(&.{});
+    const stdout_stream = &stdout_writer.interface;
+
+    var stderr = std.fs.File.stderr();
+    var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
+    const stderr_stream = &stderr_writer.interface;
+
+    var stdin_buffer: [4096]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
+    const stdin = &stdin_reader.interface;
+
+    var outstream: *std.Io.Writer = stdout_stream;
+    var errstream: *std.Io.Writer = stderr_stream;
+
     const builtins = shell_builtins.init(allocator);
+
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);
 
     var trie = try Trie.init(allocator);
     defer trie.deinit();
 
-    try buildTrie(builtins, &trie, path);
+    try utils.buildTrie(builtins.shell_functions, &trie, path);
 
-    var terminal = try Terminal.init(stdin, stdout);
-    var rl = ReadLine.init(allocator, &terminal, &auto_complete_function, &trie);
+    var terminal = try Terminal.init(stdin, stdout_stream);
+    var rl = ReadLine.init(allocator, &terminal, &utils.auto_complete_function, &trie);
     defer rl.deinit();
+
+    var commandRunner = utils.CommandRunner.init(allocator, &stdout, &stderr);
 
     while (true) {
         const command_input = try rl.readline("$ ") orelse continue;
         defer allocator.free(command_input);
 
-        if (command_input.len == 0) continue;
+        if (command_input.len == 0) break;
 
-        var args = parseArgs(allocator, command_input) catch |err| switch (err) {
-            error.NotValidLine => {
+        var args = Parser.parseArgs(allocator, command_input) catch |err| switch (err) {
+            error.InvalidLine => {
                 try errstream.print("Not Valid Line\n", .{});
                 continue;
             },
             else => return err,
         };
         defer {
-            for (args.items[0..]) |arg| {
+            for (args[0..]) |arg| {
                 allocator.free(arg);
             }
-            args.deinit(allocator);
+            allocator.free(args);
         }
 
-        const result = try utils.getStreams(allocator, args.items[0..]);
+        const commands = Parser.parseCommands(allocator, args) catch |err| switch (err) {
+            error.InvalidPipe => {
+                try errstream.print("Invalid Pipe\n", .{});
+                continue;
+            },
+            else => return err,
+        };
         defer {
-            outstream = stdout;
-            errstream = stderr;
+            for (commands[0..]) |cmd| {
+                allocator.free(cmd.argv);
+            }
+            allocator.free(commands);
+        }
+
+        const result = try utils.getStreams(allocator, args[0..]);
+        defer {
+            outstream = stdout_stream;
+            errstream = stderr_stream;
+
+            commandRunner.setOutFile(&stdout);
+            commandRunner.setErrFile(&stderr);
+
             if (result.outfile_ptr) |file| {
                 file.close();
                 allocator.destroy(file);
@@ -114,30 +106,22 @@ pub fn main() !void {
 
         // If the command had any redirection, accordingly handle the output stream
         if (result.outfile_ptr) |file| {
+            commandRunner.setOutFile(file);
+
             var file_writer = file.writerStreaming(&.{});
             outstream = &file_writer.interface;
         }
         if (result.errfile_ptr) |file| {
+            commandRunner.setErrFile(file);
+
             var file_writer = file.writerStreaming(&.{});
             errstream = &file_writer.interface;
         }
 
-        const command = args.items[0];
-        const argv = args.items[0..result.index];
-
-        if (std.mem.eql(u8, "exit", command)) break;
-
-        if (builtins.match(command)) {
-            try builtins.call(command, argv, outstream);
-        } else {
-            const file_path = try utils.isExecutable(allocator, command);
-            if (file_path) |file_exe| {
-                defer allocator.free(file_exe);
-
-                try utils.runChildProcess(allocator, argv, outstream, errstream);
-            } else {
-                try outstream.print("{s}: command not found\n", .{command});
-            }
+        if (commands.len == 1 and std.mem.eql(u8, commands[0].argv[0], "exit")) {
+            break;
         }
+
+        try commandRunner.runCommands(commands);
     }
 }
