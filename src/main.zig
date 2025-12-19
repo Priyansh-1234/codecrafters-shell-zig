@@ -9,11 +9,10 @@ const shell_builtins = @import("shell_builtin.zig").shell_builtin;
 const Trie = @import("trie.zig").Trie;
 const ReadLine = @import("readline.zig").ReadLine;
 const Terminal = @import("terminal.zig").Terminal;
+const historyManger = @import("history.zig").historyManager;
 const Allocator = std.mem.Allocator;
 
 const assert = std.debug.assert;
-
-// --- The output streams which can change upon redirection --- //
 
 pub fn main() !void {
     var dba = std.heap.DebugAllocator(.{}){};
@@ -33,10 +32,14 @@ pub fn main() !void {
     var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
     const stdin = &stdin_reader.interface;
 
+    // --- The output streams which can change upon redirection --- //
     var outstream: *std.Io.Writer = stdout_stream;
     var errstream: *std.Io.Writer = stderr_stream;
 
-    const builtins = shell_builtins.init(allocator);
+    var history_manager = historyManger.init(allocator);
+    defer history_manager.deinit();
+
+    const builtins = shell_builtins.init(allocator, &history_manager);
 
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);
@@ -46,11 +49,11 @@ pub fn main() !void {
 
     try utils.buildTrie(builtins.shell_functions, &trie, path);
 
-    var terminal = try Terminal.init(stdin, stdout_stream);
-    var rl = ReadLine.init(allocator, &terminal, &utils.auto_complete_function, &trie);
+    var terminal = try Terminal.init(stdin, stdout_stream, &history_manager);
+    var rl = ReadLine.init(allocator, &terminal, &utils.auto_complete_function, &trie, &history_manager);
     defer rl.deinit();
 
-    var commandRunner = utils.CommandRunner.init(allocator, &stdout, &stderr);
+    var commandRunner = utils.CommandRunner.init(allocator, &stdout, &stderr, builtins);
 
     while (true) {
         const command_input = try rl.readline("$ ") orelse continue;

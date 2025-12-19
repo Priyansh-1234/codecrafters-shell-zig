@@ -260,11 +260,11 @@ pub const CommandRunner = struct {
     shell_builtins: shell_builtin,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, outfile: *std.fs.File, errfile: *std.fs.File) CommandRunner {
+    pub fn init(allocator: Allocator, outfile: *std.fs.File, errfile: *std.fs.File, builtin: shell_builtin) CommandRunner {
         return .{
             .out_file = outfile,
             .err_file = errfile,
-            .shell_builtins = shell_builtin.init(allocator),
+            .shell_builtins = builtin,
             .allocator = allocator,
         };
     }

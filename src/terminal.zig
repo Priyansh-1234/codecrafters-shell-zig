@@ -1,6 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
+const historyManager = @import("history.zig").historyManager;
 const Allocator = std.mem.Allocator;
 const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
@@ -12,8 +13,9 @@ pub const Terminal = struct {
     state: posix.termios,
     reader: *Reader,
     writer: *Writer,
+    history_manager: *historyManager,
 
-    pub fn init(reader: *Reader, writer: *Writer) !Self {
+    pub fn init(reader: *Reader, writer: *Writer, history_manger: *historyManager) !Self {
         const original: posix.termios = try posix.tcgetattr(posix.STDIN_FILENO);
 
         return .{
@@ -21,6 +23,7 @@ pub const Terminal = struct {
             .original_state = original,
             .reader = reader,
             .writer = writer,
+            .history_manager = history_manger,
         };
     }
 

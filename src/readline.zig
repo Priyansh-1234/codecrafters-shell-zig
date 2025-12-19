@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 
 const Trie = @import("trie.zig").Trie;
 const Terminal = @import("terminal.zig").Terminal;
+const historyManager = @import("history.zig").historyManager;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
@@ -32,24 +33,32 @@ pub const ReadLine = struct {
 
     allocator: Allocator,
     terminal: *Terminal,
-    buffer: ArrayList(u8),
-    cursor: usize,
     auto_complete_function: auto_comp_func_type,
+    history_manager: *historyManager,
     trie: *const Trie,
 
-    pub fn init(allocator: Allocator, terminal: *Terminal, auto_complete_function: auto_comp_func_type, trie: *const Trie) Self {
+    display_buffer: ArrayList(u8),
+    command_buffer: ArrayList(u8),
+    cursor: usize,
+    history_cursor: usize,
+
+    pub fn init(allocator: Allocator, terminal: *Terminal, auto_complete_function: auto_comp_func_type, trie: *const Trie, history_manager: *historyManager) Self {
         return .{
             .allocator = allocator,
             .terminal = terminal,
-            .buffer = .empty,
+            .display_buffer = .empty,
+            .command_buffer = .empty,
             .cursor = 0,
             .auto_complete_function = auto_complete_function,
             .trie = trie,
+            .history_manager = history_manager,
+            .history_cursor = 0,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.buffer.deinit(self.allocator);
+        self.display_buffer.deinit(self.allocator);
+        self.command_buffer.deinit(self.allocator);
     }
 
     fn readKey(self: *const Self) !Key {
@@ -103,7 +112,7 @@ pub const ReadLine = struct {
         try writeBuffer.appendSlice(self.allocator, "\x1b[2K");
         try writeBuffer.append(self.allocator, '\r');
         try writeBuffer.appendSlice(self.allocator, prefix);
-        try writeBuffer.appendSlice(self.allocator, self.buffer.items);
+        try writeBuffer.appendSlice(self.allocator, self.display_buffer.items);
 
         const cursor_position = try std.fmt.allocPrint(self.allocator, "\x1b[{d}G", .{self.cursor + 3});
         defer self.allocator.free(cursor_position);
@@ -117,7 +126,7 @@ pub const ReadLine = struct {
         if (key == .ARROW_LEFT and self.cursor > 0) {
             self.cursor -= 1;
         }
-        if (key == .ARROW_RIGHT and self.cursor < self.buffer.items.len) {
+        if (key == .ARROW_RIGHT and self.cursor < self.display_buffer.items.len) {
             self.cursor += 1;
         }
     }
@@ -125,25 +134,57 @@ pub const ReadLine = struct {
     fn deleteCharacter(self: *Self, key: Key) void {
         if (key == .BACKSPACE and self.cursor > 0) {
             self.cursor -= 1;
-            _ = self.buffer.orderedRemove(self.cursor);
+            _ = self.display_buffer.orderedRemove(self.cursor);
+
+            if (self.history_cursor == 0) {
+                _ = self.command_buffer.orderedRemove(self.cursor);
+            }
         }
-        if (key == .DEL_KEY and self.cursor < self.buffer.items.len) {
-            _ = self.buffer.orderedRemove(self.cursor);
+        if (key == .DEL_KEY and self.cursor < self.display_buffer.items.len) {
+            _ = self.display_buffer.orderedRemove(self.cursor);
+
+            if (self.history_cursor == 0) {
+                _ = self.command_buffer.orderedRemove(self.cursor);
+            }
         }
     }
 
-    fn changeCommand(_: *Self, _: Key) !void {
-        return error.NotImplemented;
+    fn changeDisplayBuffer(self: *Self, command: []const u8) Allocator.Error!void {
+        if (std.mem.eql(u8, command[0..], self.display_buffer.items[0..])) return;
+
+        self.display_buffer.clearAndFree(self.allocator);
+        try self.display_buffer.appendSlice(self.allocator, command);
+    }
+
+    fn changeCommand(self: *Self, key: Key) !void {
+        if (key == .ARROW_UP) {
+            if (self.history_cursor < self.history_manager.history.items.len) {
+                self.history_cursor += 1;
+            }
+        }
+        if (key == .ARROW_DOWN) {
+            if (self.history_cursor > 0) {
+                self.history_cursor -= 1;
+            }
+        }
+        if (self.history_cursor == 0) {
+            try self.changeDisplayBuffer(self.command_buffer.items[0..]);
+            return;
+        }
+
+        const index: isize = -@as(isize, @intCast(self.history_cursor));
+        const command = self.history_manager.getCommand(index);
+        try self.changeDisplayBuffer(command);
     }
 
     fn getWord(self: *Self) ?struct { word: []const u8, index: usize } {
-        if (self.buffer.items.len == 0) return null;
+        if (self.display_buffer.items.len == 0) return null;
 
         var i: usize = 0;
-        while (i > 0 and self.buffer.items[i - 1] != ' ') : (i -= 1) {}
+        while (i > 0 and self.display_buffer.items[i - 1] != ' ') : (i -= 1) {}
 
         return .{
-            .word = self.buffer.items[i..],
+            .word = self.display_buffer.items[i..],
             .index = i,
         };
     }
@@ -164,13 +205,14 @@ pub const ReadLine = struct {
                 switch (ch) {
                     control_key('c') => return error.SIGKILL,
                     control_key('a') => self.cursor = 0,
-                    control_key('e') => self.cursor = self.buffer.items.len,
+                    control_key('e') => self.cursor = self.display_buffer.items.len,
                     control_key('f') => self.moveCursor(.ARROW_RIGHT),
                     control_key('b') => self.moveCursor(.ARROW_LEFT),
                     control_key('d') => self.deleteCharacter(.DEL_KEY),
 
                     '\n' => {
-                        return try self.buffer.toOwnedSlice(self.allocator);
+                        self.command_buffer.clearAndFree(self.allocator);
+                        return try self.display_buffer.toOwnedSlice(self.allocator);
                     },
 
                     '\t' => {
@@ -179,7 +221,7 @@ pub const ReadLine = struct {
                             try self.terminal.writer.writeByte('\x07');
                             return null;
                         }
-                        defer self.cursor = self.buffer.items.len;
+                        defer self.cursor = self.display_buffer.items.len;
 
                         const word = wordResult.?.word;
                         const index = wordResult.?.index;
@@ -201,7 +243,11 @@ pub const ReadLine = struct {
                         }
 
                         if (!std.mem.eql(u8, suggestionResult.autofill, word)) {
-                            try self.buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
+                            try self.display_buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
+
+                            if (self.history_cursor == 0) {
+                                try self.command_buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
+                            }
 
                             return null;
                         }
@@ -217,21 +263,25 @@ pub const ReadLine = struct {
                     },
 
                     else => {
-                        try self.buffer.append(self.allocator, ch);
+                        try self.display_buffer.append(self.allocator, ch);
+                        if (self.history_cursor == 0) {
+                            try self.command_buffer.append(self.allocator, ch);
+                        }
                         self.cursor += 1;
                     },
                 }
             },
-            .ARROW_UP, .ARROW_DOWN => self.changeCommand(key) catch {},
+            .ARROW_UP, .ARROW_DOWN => try self.changeCommand(key),
 
             .ARROW_LEFT, .ARROW_RIGHT => self.moveCursor(key),
 
             .HOME_KEY => self.cursor = 0,
 
-            .END_KEY => self.cursor = self.buffer.items.len,
+            .END_KEY => self.cursor = self.display_buffer.items.len,
 
             .BACKSPACE, .DEL_KEY => self.deleteCharacter(key),
         }
+        self.cursor = @min(self.cursor, self.display_buffer.items.len);
 
         return null;
     }
@@ -239,93 +289,13 @@ pub const ReadLine = struct {
     fn processKey(self: *Self) !?[]const u8 {
         const key = try self.readKey();
         return self.handleKey(key);
-
-        //        switch (key) {
-        //            .char => |ch| {
-        //                switch (ch) {
-        //                    control_key('c') => return error.SIGKILL,
-        //                    control_key('a') => self.cursor = 0,
-        //                    control_key('e') => self.cursor = self.buffer.items.len,
-        //                    control_key('f') => self.moveCursor(.ARROW_RIGHT),
-        //                    control_key('b') => self.moveCursor(.ARROW_LEFT),
-        //                    control_key('d') => self.deleteCharacter(.DEL_KEY),
-        //
-        //                    '\n' => {
-        //                        return try self.buffer.toOwnedSlice(self.allocator);
-        //                    },
-        //
-        //                    '\t' => {
-        //                        const wordResult = self.getWord();
-        //                        if (wordResult == null) {
-        //                            try self.terminal.writer.writeByte('\x07');
-        //                            return null;
-        //                        }
-        //                        defer self.cursor = self.buffer.items.len;
-        //
-        //                        const word = wordResult.?.word;
-        //                        const index = wordResult.?.index;
-        //
-        //                        const suggestionResult = self.auto_complete_function(self.trie, word, self.allocator) catch |err| switch (err) {
-        //                            error.InvalidComplete => {
-        //                                try self.terminal.writer.writeByte('\x07');
-        //                                return null;
-        //                            },
-        //                            else => return err,
-        //                        };
-        //                        defer {
-        //                            for (suggestionResult.suggestions[0..]) |suggestion| {
-        //                                self.allocator.free(suggestion);
-        //                            }
-        //                            self.allocator.free(suggestionResult.suggestions);
-        //
-        //                            self.allocator.free(suggestionResult.autofill);
-        //                        }
-        //
-        //                        if (!std.mem.eql(u8, suggestionResult.autofill, word)) {
-        //                            try self.buffer.replaceRange(self.allocator, index, word.len, suggestionResult.autofill);
-        //
-        //                            return null;
-        //                        }
-        //
-        //                        try self.terminal.writer.writeByte('\x07');
-        //
-        //                        const newKey = try self.readKey();
-        //                        if (newKey != .char or newKey.char != '\t') {
-        //                            if (newKey == .char) {
-        //                                try self.buffer.append(self.allocator, newKey.char);
-        //                                self.cursor += 1;
-        //                            }
-        //                            return null;
-        //                        }
-        //
-        //                        try self.displaySuggestions(suggestionResult.suggestions);
-        //                    },
-        //
-        //                    else => {
-        //                        try self.buffer.append(self.allocator, ch);
-        //                        self.cursor += 1;
-        //                    },
-        //                }
-        //            },
-        //            .ARROW_UP, .ARROW_DOWN => self.changeCommand(key) catch {},
-        //
-        //            .ARROW_LEFT, .ARROW_RIGHT => self.moveCursor(key),
-        //
-        //            .HOME_KEY => self.cursor = 0,
-        //
-        //            .END_KEY => self.cursor = self.buffer.items.len,
-        //
-        //            .BACKSPACE, .DEL_KEY => self.deleteCharacter(key),
-        //        }
-        //
-        //        return null;
     }
 
     pub fn readline(self: *Self, prefix: []const u8) !?[]const u8 {
         try self.terminal.raw();
         defer {
             self.terminal.cooked() catch {};
-            self.buffer.clearAndFree(self.allocator);
+            self.display_buffer.clearAndFree(self.allocator);
             self.cursor = 0;
             self.terminal.writer.writeByte('\n') catch {};
         }
@@ -337,7 +307,10 @@ pub const ReadLine = struct {
                 else => return err,
             };
 
-            if (value) |line| return line;
+            if (value) |line| {
+                try self.history_manager.pushHistory(line);
+                return line;
+            }
         }
     }
 };

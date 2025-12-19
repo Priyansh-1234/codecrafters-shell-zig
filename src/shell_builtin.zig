@@ -5,6 +5,7 @@ const posix = std.posix;
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
+const historyManager = @import("history.zig").historyManager;
 
 const getExecutable = utils.getExecutable;
 
@@ -13,11 +14,21 @@ pub const shell_builtin = struct {
 
     allocator: Allocator,
     shell_functions: []const []const u8,
-    pub fn init(allocator: Allocator) Self {
+    history_manager: *historyManager,
+
+    pub fn init(allocator: Allocator, history_manager: *historyManager) Self {
         return .{
             .allocator = allocator,
-            .shell_functions = &[_][]const u8{ "echo", "type", "exit", "cd", "pwd" },
+            .shell_functions = &[_][]const u8{ "echo", "type", "exit", "cd", "pwd", "history" },
+            .history_manager = history_manager,
         };
+    }
+
+    fn historyFn(self: *const Self, args: []const []const u8, outstream: *Writer, errstream: *Writer) Writer.Error!void {
+        switch (args.len) {
+            0 => try self.history_manager.displayHistory("", outstream, errstream),
+            else => try self.history_manager.displayHistory(args[0], outstream, errstream),
+        }
     }
 
     fn echoFn(self: *const Self, args: []const []const u8, outstream: *Writer) !void {
@@ -114,6 +125,7 @@ pub const shell_builtin = struct {
         if (std.mem.eql(u8, "type", function_name)) return self.typeFn(argv[1..], outstream, errstream);
         if (std.mem.eql(u8, "pwd", function_name)) return self.pwdFn(argv[1..], outstream);
         if (std.mem.eql(u8, "cd", function_name)) return self.cdFn(argv[1..], outstream, errstream);
+        if (std.mem.eql(u8, "history", function_name)) return self.historyFn(argv[1..], outstream, errstream);
         return error.NotBuiltinFuncion;
     }
 };
