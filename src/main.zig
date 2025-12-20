@@ -44,6 +44,40 @@ pub fn main() !void {
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);
 
+    const hist_filename = std.process.getEnvVarOwned(allocator, "HISTFILE") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => blk: {
+            const home = try std.process.getEnvVarOwned(allocator, "HOME");
+            defer allocator.free(home);
+            break :blk try std.fs.path.join(allocator, &.{ home, ".shell_history" });
+        },
+        else => return err,
+    };
+    defer allocator.free(hist_filename);
+
+    {
+        var hist_buffer: [1024]u8 = undefined;
+        var hist_file = try utils.openFile(allocator, hist_filename, .read_only, false);
+        defer {
+            hist_file.close();
+            allocator.destroy(hist_file);
+        }
+        var hist_file_reader = hist_file.reader(&hist_buffer);
+        const reader = &hist_file_reader.interface;
+
+        history_manager.readHistory(reader) catch {};
+    }
+    defer blk: {
+        var hist_file = utils.openFile(allocator, hist_filename, .write_only, true) catch break :blk;
+        defer {
+            hist_file.close();
+            allocator.destroy(hist_file);
+        }
+        var hist_file_writer = hist_file.writerStreaming(&.{});
+        const writer = &hist_file_writer.interface;
+
+        history_manager.writeHistory(writer) catch {};
+    }
+
     var trie = try Trie.init(allocator);
     defer trie.deinit();
 

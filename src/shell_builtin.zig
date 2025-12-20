@@ -24,10 +24,94 @@ pub const shell_builtin = struct {
         };
     }
 
-    fn historyFn(self: *const Self, args: []const []const u8, outstream: *Writer, errstream: *Writer) Writer.Error!void {
-        switch (args.len) {
-            0 => try self.history_manager.displayHistory("", outstream, errstream),
-            else => try self.history_manager.displayHistory(args[0], outstream, errstream),
+    fn historyFn(self: *const Self, args: []const []const u8, outstream: *Writer, errstream: *Writer) !void {
+        var i: usize = 0;
+
+        var read_filename: []const u8 = "";
+        var write_filename: []const u8 = "";
+        var limit: usize = 0;
+        var limit_set = false;
+        var append = false;
+
+        while (i < args.len) : (i += 1) {
+            const arg = args[i];
+            if (std.mem.eql(u8, "-r", arg)) {
+                if (i + 1 >= args.len) {
+                    _ = try errstream.write("history: Invalid Usage\n");
+                    try self.history_manager.printUsage(errstream);
+                    return;
+                }
+
+                read_filename = args[i + 1];
+
+                i += 1;
+                continue;
+            }
+
+            if (std.mem.eql(u8, "-w", arg)) {
+                if (i + 1 >= args.len) {
+                    _ = try errstream.write("history: Invalid Usage\n");
+                    try self.history_manager.printUsage(errstream);
+                    return;
+                }
+
+                write_filename = args[i + 1];
+                i += 1;
+                continue;
+            }
+
+            if (std.mem.eql(u8, "-a", arg)) {
+                if (i + 1 >= args.len) {
+                    _ = try errstream.write("history: Invalid Usage\n");
+                    try self.history_manager.printUsage(errstream);
+                    return;
+                }
+
+                append = true;
+                write_filename = args[i + 1];
+                i += 1;
+                continue;
+            }
+
+            if (!limit_set) {
+                limit = try std.fmt.parseInt(usize, arg, 10);
+                limit_set = true;
+            } else {
+                _ = try errstream.write("history: Invalid Usage\n");
+                try self.history_manager.printUsage(errstream);
+                return;
+            }
+        }
+
+        if (read_filename.len > 0) {
+            const file = try utils.openFile(self.allocator, read_filename, .read_only, false);
+            defer {
+                file.close();
+                self.allocator.destroy(file);
+            }
+
+            var reader_buffer: [1024]u8 = undefined;
+            var file_reader = file.reader(&reader_buffer);
+            const reader = &file_reader.interface;
+
+            try self.history_manager.readHistory(reader);
+        }
+
+        if (write_filename.len > 0) {
+            const file = try utils.openFile(self.allocator, write_filename, .write_only, append);
+            defer {
+                file.close();
+                self.allocator.destroy(file);
+            }
+
+            var file_writer = file.writerStreaming(&.{});
+            const writer = &file_writer.interface;
+
+            try self.history_manager.writeHistory(writer);
+        }
+
+        if (read_filename.len == 0 and write_filename.len == 0) {
+            try self.history_manager.displayHistory(limit_set, limit, outstream);
         }
     }
 

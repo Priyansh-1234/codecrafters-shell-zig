@@ -172,8 +172,7 @@ pub const ReadLine = struct {
             return;
         }
 
-        const index: isize = -@as(isize, @intCast(self.history_cursor));
-        const command = self.history_manager.getCommand(index);
+        const command = self.history_manager.getCommand(self.history_cursor);
         try self.changeDisplayBuffer(command);
     }
 

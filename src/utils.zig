@@ -252,6 +252,31 @@ pub fn auto_complete_function(trie: *const Trie, word: []const u8, allocator: Al
     return result orelse unreachable;
 }
 
+pub fn openFile(allocator: Allocator, filename: []const u8, mode: std.fs.File.OpenMode, append: bool) !*std.fs.File {
+    const file = try allocator.create(std.fs.File);
+    errdefer allocator.destroy(file);
+
+    if (append) {
+        if (std.fs.path.isAbsolute(filename)) {
+            file.* = try std.fs.createFileAbsolute(filename, .{ .truncate = false });
+        } else {
+            file.* = try std.fs.cwd().createFile(filename, .{ .truncate = false });
+        }
+
+        try file.seekFromEnd(0);
+    } else {
+        if (std.fs.path.isAbsolute(filename)) {
+            file.* = std.fs.openFileAbsolute(filename, .{ .mode = mode }) catch
+                try std.fs.createFileAbsolute(filename, .{ .truncate = true });
+        } else {
+            file.* = std.fs.cwd().openFile(filename, .{ .mode = mode }) catch
+                try std.fs.cwd().createFile(filename, .{ .truncate = true });
+        }
+    }
+
+    return file;
+}
+
 pub const CommandRunner = struct {
     const Self = @This();
 

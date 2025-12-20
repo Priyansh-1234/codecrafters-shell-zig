@@ -3,6 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
+const Reader = std.Io.Reader;
 
 pub const historyManager = struct {
     const Self = @This();
@@ -27,15 +28,32 @@ pub const historyManager = struct {
         self.history.deinit(self.allocator);
     }
 
+    pub fn readHistory(self: *Self, reader: *Reader) !void {
+        while (reader.takeDelimiterExclusive('\n')) |line| {
+            try self.pushHistory(line);
+            reader.toss(1);
+        } else |err| switch (err) {
+            error.EndOfStream => {},
+            else => return err,
+        }
+    }
+
+    pub fn writeHistory(self: *Self, writer: *Writer) !void {
+        for (self.history.items[0..]) |command| {
+            _ = try writer.write(command);
+            try writer.writeByte('\n');
+        }
+    }
+
     pub fn pushHistory(self: *Self, command: []const u8) Allocator.Error!void {
         const ownedCommand = try self.allocator.dupe(u8, command);
         try self.history.append(self.allocator, ownedCommand);
         self.index = self.history.items.len - 1;
     }
 
-    pub fn getCommand(self: *Self, index: isize) []const u8 {
-        if (index >= self.history.items.len or -index > self.history.items.len) return "";
-        const his_index: usize = if (index >= 0) @intCast(index) else self.history.items.len - @as(usize, @intCast(-index));
+    pub fn getCommand(self: *Self, index: usize) []const u8 {
+        if (index == 0 or index > self.history.items.len) return "";
+        const his_index = self.history.items.len - index;
         return self.history.items[his_index];
     }
 
@@ -43,18 +61,11 @@ pub const historyManager = struct {
         try stream.print("history: usage: history [n]\n", .{});
     }
 
-    pub fn displayHistory(self: *const Self, number: []const u8, outstream: *Writer, errstream: *Writer) Writer.Error!void {
-        var num: usize = self.history.items.len;
-        if (number.len != 0) {
-            num = std.fmt.parseInt(usize, number, 10) catch {
-                try errstream.print("history: invalid usage\n", .{});
-                try self.printUsage(errstream);
-                try errstream.flush();
-                return;
-            };
+    pub fn displayHistory(self: *const Self, limit_set: bool, limit: usize, outstream: *Writer) Writer.Error!void {
+        var amount: usize = self.history.items.len;
+        if (limit_set) {
+            amount = @min(amount, limit);
         }
-
-        const amount = @min(num, self.history.items.len);
         const start = self.history.items.len - amount;
         for (self.history.items[start..], (start + 1)..) |command, i| {
             try outstream.print("\t{d} {s}\n", .{ i, command });
