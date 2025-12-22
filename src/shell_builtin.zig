@@ -74,7 +74,11 @@ pub const shell_builtin = struct {
             }
 
             if (!limit_set) {
-                limit = try std.fmt.parseInt(usize, arg, 10);
+                limit = std.fmt.parseInt(usize, arg, 10) catch {
+                    _ = try errstream.write("history: Invalid Usage\n");
+                    try self.history_manager.printUsage(errstream);
+                    return;
+                };
                 limit_set = true;
             } else {
                 _ = try errstream.write("history: Invalid Usage\n");
@@ -90,24 +94,21 @@ pub const shell_builtin = struct {
                 self.allocator.destroy(file);
             }
 
-            var reader_buffer: [1024]u8 = undefined;
-            var file_reader = file.reader(&reader_buffer);
-            const reader = &file_reader.interface;
-
-            try self.history_manager.readHistory(reader);
+            try self.history_manager.readHistory(file);
         }
 
         if (write_filename.len > 0) {
-            const file = try utils.openFile(self.allocator, write_filename, .write_only, append);
+            const file = try utils.openFile(self.allocator, write_filename, .read_write, false);
             defer {
                 file.close();
                 self.allocator.destroy(file);
             }
 
-            var file_writer = file.writerStreaming(&.{});
-            const writer = &file_writer.interface;
-
-            try self.history_manager.writeHistory(writer);
+            if (append) {
+                try self.history_manager.appendHistory(file);
+            } else {
+                try self.history_manager.writeHistory(file);
+            }
         }
 
         if (read_filename.len == 0 and write_filename.len == 0) {

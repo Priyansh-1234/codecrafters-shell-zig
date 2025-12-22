@@ -11,12 +11,14 @@ pub const historyManager = struct {
     allocator: Allocator,
     history: ArrayList([]const u8),
     index: usize,
+    last_written: usize,
 
     pub fn init(allocator: Allocator) Self {
         return .{
             .allocator = allocator,
             .history = .empty,
             .index = 0,
+            .last_written = 0,
         };
     }
 
@@ -28,9 +30,15 @@ pub const historyManager = struct {
         self.history.deinit(self.allocator);
     }
 
-    pub fn readHistory(self: *Self, reader: *Reader) !void {
-        while (reader.takeDelimiterExclusive('\n')) |line| {
-            try self.pushHistory(line);
+    pub fn readHistory(self: *Self, file: *std.fs.File) !void {
+        var buffer: [1024]u8 = undefined;
+        var file_reader = file.reader(&buffer);
+        const reader = &file_reader.interface;
+
+        while (reader.takeDelimiterExclusive('\n')) |command| {
+            if (command.len != 0) {
+                try self.pushHistory(command);
+            }
             reader.toss(1);
         } else |err| switch (err) {
             error.EndOfStream => {},
@@ -38,11 +46,31 @@ pub const historyManager = struct {
         }
     }
 
-    pub fn writeHistory(self: *Self, writer: *Writer) !void {
+    pub fn writeHistory(self: *Self, file: *std.fs.File) !void {
+        var file_writer = file.writerStreaming(&.{});
+        const writer = &file_writer.interface;
+
         for (self.history.items[0..]) |command| {
             _ = try writer.write(command);
             try writer.writeByte('\n');
         }
+
+        self.last_written = self.history.items.len;
+        try writer.flush();
+    }
+
+    pub fn appendHistory(self: *Self, file: *std.fs.File) !void {
+        try file.seekFromEnd(0);
+
+        var file_writer = file.writerStreaming(&.{});
+        const writer = &file_writer.interface;
+
+        for (self.history.items[self.last_written..]) |command| {
+            _ = try writer.write(command);
+            try writer.writeByte('\n');
+        }
+
+        self.last_written = self.history.items.len;
     }
 
     pub fn pushHistory(self: *Self, command: []const u8) Allocator.Error!void {

@@ -55,27 +55,22 @@ pub fn main() !void {
     defer allocator.free(hist_filename);
 
     {
-        var hist_buffer: [1024]u8 = undefined;
         var hist_file = try utils.openFile(allocator, hist_filename, .read_only, false);
         defer {
             hist_file.close();
             allocator.destroy(hist_file);
         }
-        var hist_file_reader = hist_file.reader(&hist_buffer);
-        const reader = &hist_file_reader.interface;
 
-        history_manager.readHistory(reader) catch {};
+        history_manager.readHistory(hist_file) catch {};
     }
     defer blk: {
-        var hist_file = utils.openFile(allocator, hist_filename, .write_only, true) catch break :blk;
+        var hist_file = utils.openFile(allocator, hist_filename, .write_only, false) catch break :blk;
         defer {
             hist_file.close();
             allocator.destroy(hist_file);
         }
-        var hist_file_writer = hist_file.writerStreaming(&.{});
-        const writer = &hist_file_writer.interface;
 
-        history_manager.writeHistory(writer) catch {};
+        history_manager.writeHistory(hist_file) catch {};
     }
 
     var trie = try Trie.init(allocator);
