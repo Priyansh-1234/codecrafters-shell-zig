@@ -48,7 +48,7 @@ pub fn writeDefaultHistory(allocator: Allocator, history_manager: *HistoryManage
     };
     defer allocator.free(hist_filename);
 
-    var hist_file = try openFile(allocator, hist_filename, .read_only, false);
+    var hist_file = try openFile(allocator, hist_filename, .write_only, false);
     defer {
         hist_file.close();
         allocator.destroy(hist_file);
