@@ -5,7 +5,7 @@ const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 
-pub const historyManager = struct {
+pub const HistoryManager = struct {
     const Self = @This();
 
     allocator: Allocator,

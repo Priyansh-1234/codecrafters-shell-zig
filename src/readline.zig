@@ -3,7 +3,7 @@ const utils = @import("utils.zig");
 
 const Trie = @import("trie.zig").Trie;
 const Terminal = @import("terminal.zig").Terminal;
-const historyManager = @import("history.zig").historyManager;
+const HistoryManager = @import("history.zig").HistoryManager;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Writer = std.Io.Writer;
@@ -34,7 +34,7 @@ pub const ReadLine = struct {
     allocator: Allocator,
     terminal: *Terminal,
     auto_complete_function: auto_comp_func_type,
-    history_manager: *historyManager,
+    history_manager: *HistoryManager,
     trie: *const Trie,
 
     display_buffer: ArrayList(u8),
@@ -42,7 +42,7 @@ pub const ReadLine = struct {
     cursor: usize,
     history_cursor: usize,
 
-    pub fn init(allocator: Allocator, terminal: *Terminal, auto_complete_function: auto_comp_func_type, trie: *const Trie, history_manager: *historyManager) Self {
+    pub fn init(allocator: Allocator, terminal: *Terminal, auto_complete_function: auto_comp_func_type, trie: *const Trie, history_manager: *HistoryManager) Self {
         return .{
             .allocator = allocator,
             .terminal = terminal,
@@ -198,6 +198,19 @@ pub const ReadLine = struct {
         try self.terminal.writer.writeByte('\n');
     }
 
+    fn deletePrevWord(self: *Self) void {
+        if (self.display_buffer.items.len == 0 or self.cursor == 0) return;
+
+        var i: usize = self.cursor - 1;
+        var inword = false;
+        while (!inword or self.display_buffer.items[i] != ' ') : ({
+            if (i > 0) i -= 1 else break;
+        }) {
+            if (std.ascii.isAlphanumeric(self.display_buffer.items[i])) inword = true;
+            self.deleteCharacter(.BACKSPACE);
+        }
+    }
+
     fn handleKey(self: *Self, key: Key) !?[]const u8 {
         switch (key) {
             .char => |ch| {
@@ -208,6 +221,7 @@ pub const ReadLine = struct {
                     control_key('f') => self.moveCursor(.ARROW_RIGHT),
                     control_key('b') => self.moveCursor(.ARROW_LEFT),
                     control_key('d') => self.deleteCharacter(.DEL_KEY),
+                    control_key('w') => self.deletePrevWord(),
 
                     '\n' => {
                         self.command_buffer.clearAndFree(self.allocator);

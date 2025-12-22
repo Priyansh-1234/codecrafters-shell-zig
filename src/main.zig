@@ -5,21 +5,31 @@ const Parser = @import("parser.zig");
 
 const posix = std.posix;
 
-const shell_builtins = @import("shell_builtin.zig").shell_builtin;
-const Trie = @import("trie.zig").Trie;
+const CommandRunner = @import("commandRunner.zig").CommandRunner;
+const ShellBuiltins = @import("shell_builtin.zig").ShellBuiltins;
+const HistoryManger = @import("history.zig").HistoryManager;
 const ReadLine = @import("readline.zig").ReadLine;
 const Terminal = @import("terminal.zig").Terminal;
-const historyManger = @import("history.zig").historyManager;
+const Trie = @import("trie.zig").Trie;
 const Allocator = std.mem.Allocator;
 
 const assert = std.debug.assert;
 
 pub fn main() !void {
-    var dba = std.heap.DebugAllocator(.{}){};
-    defer assert(dba.deinit() == .ok);
-    const allocator = dba.allocator();
+    // --- Setting up the allocator --- //
 
-    // --- Setting up the standard out and standard in and standard err --- //
+    //    var dba = std.heap.DebugAllocator(.{}){};
+    //    defer assert(dba.deinit() == .ok);
+    //    const allocator = dba.allocator();
+
+    const allocator = std.heap.smp_allocator;
+
+    // --- Setting up the standard in, standard out and standard err --- //
+    var stdin_buffer: [4096]u8 = undefined;
+    var stdin = std.fs.File.stdin();
+    var stdin_reader = stdin.readerStreaming(&stdin_buffer);
+    const stdin_stream = &stdin_reader.interface;
+
     var stdout = std.fs.File.stdout();
     var stdout_writer = stdout.writerStreaming(&.{});
     const stdout_stream = &stdout_writer.interface;
@@ -28,61 +38,31 @@ pub fn main() !void {
     var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
     const stderr_stream = &stderr_writer.interface;
 
-    var stdin_buffer: [4096]u8 = undefined;
-    var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
-    const stdin = &stdin_reader.interface;
-
     // --- The output streams which can change upon redirection --- //
     var outstream: *std.Io.Writer = stdout_stream;
     var errstream: *std.Io.Writer = stderr_stream;
 
-    var history_manager = historyManger.init(allocator);
+    var history_manager = HistoryManger.init(allocator);
     defer history_manager.deinit();
 
-    const builtins = shell_builtins.init(allocator, &history_manager);
+    const builtins = ShellBuiltins.init(allocator, &history_manager);
 
     const path = try std.process.getEnvVarOwned(allocator, "PATH");
     defer allocator.free(path);
 
-    const hist_filename = std.process.getEnvVarOwned(allocator, "HISTFILE") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => blk: {
-            const home = try std.process.getEnvVarOwned(allocator, "HOME");
-            defer allocator.free(home);
-            break :blk try std.fs.path.join(allocator, &.{ home, ".shell_history" });
-        },
-        else => return err,
-    };
-    defer allocator.free(hist_filename);
-
-    {
-        var hist_file = try utils.openFile(allocator, hist_filename, .read_only, false);
-        defer {
-            hist_file.close();
-            allocator.destroy(hist_file);
-        }
-
-        history_manager.readHistory(hist_file) catch {};
-    }
-    defer blk: {
-        var hist_file = utils.openFile(allocator, hist_filename, .write_only, false) catch break :blk;
-        defer {
-            hist_file.close();
-            allocator.destroy(hist_file);
-        }
-
-        history_manager.writeHistory(hist_file) catch {};
-    }
+    try utils.readDefaultHistory(allocator, &history_manager);
+    defer utils.writeDefaultHistory(allocator, &history_manager) catch {};
 
     var trie = try Trie.init(allocator);
     defer trie.deinit();
 
     try utils.buildTrie(builtins.shell_functions, &trie, path);
 
-    var terminal = try Terminal.init(stdin, stdout_stream, &history_manager);
+    var terminal = try Terminal.init(stdin_stream, stdout_stream, &history_manager);
     var rl = ReadLine.init(allocator, &terminal, &utils.auto_complete_function, &trie, &history_manager);
     defer rl.deinit();
 
-    var commandRunner = utils.CommandRunner.init(allocator, &stdout, &stderr, builtins);
+    var commandRunner = CommandRunner.init(allocator, &stdout, &stderr, builtins);
 
     while (true) {
         const command_input = try rl.readline("$ ") orelse continue;

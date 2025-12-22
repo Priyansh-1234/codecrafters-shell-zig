@@ -5,18 +5,18 @@ const posix = std.posix;
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
-const historyManager = @import("history.zig").historyManager;
+const HistoryManager = @import("history.zig").HistoryManager;
 
 const getExecutable = utils.getExecutable;
 
-pub const shell_builtin = struct {
+pub const ShellBuiltins = struct {
     const Self = @This();
 
     allocator: Allocator,
     shell_functions: []const []const u8,
-    history_manager: *historyManager,
+    history_manager: *HistoryManager,
 
-    pub fn init(allocator: Allocator, history_manager: *historyManager) Self {
+    pub fn init(allocator: Allocator, history_manager: *HistoryManager) Self {
         return .{
             .allocator = allocator,
             .shell_functions = &[_][]const u8{ "echo", "type", "exit", "cd", "pwd", "history" },
