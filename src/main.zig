@@ -98,7 +98,13 @@ pub fn main() !void {
             allocator.free(commands);
         }
 
-        const result = try utils.getStreams(allocator, args[0..]);
+        const result = utils.getStreams(allocator, args[0..]) catch |err| switch (err) {
+            error.InvalidLine => {
+                try errstream.print("Invalid Line\n", .{});
+                continue;
+            },
+            else => return err,
+        };
         defer {
             outstream = stdout_stream;
             errstream = stderr_stream;

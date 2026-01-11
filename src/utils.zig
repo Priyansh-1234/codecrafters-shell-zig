@@ -132,22 +132,26 @@ pub fn getStreams(allocator: std.mem.Allocator, args: []const []const u8) !struc
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, ">") or std.mem.eql(u8, arg, "1>")) {
+            if (args.len <= i + 1) return error.InvalidLine;
             outfile_name = args[i + 1];
             outfile_present = true;
             idx1 = i;
             i += 1;
         } else if (std.mem.eql(u8, "2>", arg)) {
+            if (args.len <= i + 1) return error.InvalidLine;
             errfile_name = args[i + 1];
             errfile_present = true;
             idx2 = i;
             i += 1;
         } else if (std.mem.eql(u8, arg, ">>") or std.mem.eql(u8, arg, "1>>")) {
+            if (args.len <= i + 1) return error.InvalidLine;
             outfile_name = args[i + 1];
             outfile_present = true;
             outfile_append = true;
             idx1 = i;
             i += 1;
         } else if (std.mem.eql(u8, arg, "2>>")) {
+            if (args.len <= i + 1) return error.InvalidLine;
             errfile_name = args[i + 1];
             errfile_present = true;
             errfile_append = true;
